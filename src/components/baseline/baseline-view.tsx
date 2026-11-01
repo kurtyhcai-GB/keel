@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { api } from "@/lib/client-api";
+import { documentRemovedMessage } from "@/lib/document-removed";
 import type { DocumentView, FactView, QuestionView } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -136,8 +137,10 @@ export function BaselineView() {
   async function removeDocument(documentId: string) {
     setBusyDocumentId(documentId);
     try {
-      await api(`/api/documents/${documentId}`, { method: "DELETE" });
-      toast.success("Document removed. Accepted facts stay in your baseline.");
+      const result = await api<{ confirmedKept?: number }>(`/api/documents/${documentId}`, {
+        method: "DELETE",
+      });
+      toast.success(documentRemovedMessage(result.confirmedKept ?? 0));
       await reload();
     } finally {
       setBusyDocumentId(null);
