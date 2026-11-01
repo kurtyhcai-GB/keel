@@ -101,6 +101,52 @@ function norm(value: string | null | undefined): string {
   return (value ?? "").trim().toLowerCase().replace(/\s+/g, " ");
 }
 
+/** Stable key for title, company, and date range — used to skip duplicate extractions. */
+export function factIdentityKey(fact: {
+  title: string | null | undefined;
+  company: string | null | undefined;
+  startDate: string | null | undefined;
+  endDate: string | null | undefined;
+}): string {
+  return `${norm(fact.title)}|${norm(fact.company)}|${norm(fact.startDate)}|${norm(fact.endDate)}`;
+}
+
+export function factsMatchByIdentity(
+  left: {
+    title: string | null | undefined;
+    company: string | null | undefined;
+    startDate: string | null | undefined;
+    endDate: string | null | undefined;
+  },
+  right: {
+    title: string | null | undefined;
+    company: string | null | undefined;
+    startDate: string | null | undefined;
+    endDate: string | null | undefined;
+  },
+): boolean {
+  return factIdentityKey(left) === factIdentityKey(right);
+}
+
+const AUTO_EXTRACTION_QUESTION_PREFIXES = [
+  "This document was stored, but no roles were extracted",
+  "No AI provider is configured",
+] as const;
+
+export function isAutoExtractionQuestion(question: string): boolean {
+  const trimmed = question.trim();
+  return AUTO_EXTRACTION_QUESTION_PREFIXES.some((prefix) => trimmed.startsWith(prefix));
+}
+
+/** Strip likely secrets from provider errors before showing them in the UI. */
+export function sanitizeExtractionWarning(text: string): string {
+  return text
+    .replace(/\bsk-[a-zA-Z0-9]{20,}\b/g, "[redacted]")
+    .replace(/\bAIza[a-zA-Z0-9_-]{30,}\b/g, "[redacted]")
+    .replace(/Bearer\s+[a-zA-Z0-9._-]+/gi, "Bearer [redacted]")
+    .replace(/([?&]key=)[^&\s"']+/gi, "$1[redacted]");
+}
+
 export function datesConflict(
   left: { title: string | null; company: string | null; startDate: string | null; endDate: string | null },
   right: { title: string | null; company: string | null; startDate: string | null; endDate: string | null },

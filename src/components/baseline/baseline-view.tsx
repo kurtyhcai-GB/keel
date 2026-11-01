@@ -5,9 +5,33 @@ import { TriangleAlert, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { api } from "@/lib/client-api";
 import type { DocumentView, FactView, QuestionView } from "@/lib/types";
 import { cn } from "@/lib/utils";
+
+type UploadResponse =
+  | { duplicate: true; existingDocument: DocumentView; filename: string }
+  | {
+      duplicate?: false;
+      document: DocumentView;
+      facts: FactView[];
+      questionIds: string[];
+      warnings: string[];
+    };
+
+type ExtractResponse = {
+  facts: FactView[];
+  questionIds: string[];
+  warnings: string[];
+};
 
 export function BaselineView() {
   const [facts, setFacts] = useState<FactView[]>([]);
@@ -15,6 +39,12 @@ export function BaselineView() {
   const [documents, setDocuments] = useState<DocumentView[]>([]);
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [extractionWarnings, setExtractionWarnings] = useState<string[]>([]);
+  const [pendingDuplicate, setPendingDuplicate] = useState<{
+    file: File;
+    existingDocument: DocumentView;
+  } | null>(null);
+  const [busyDocumentId, setBusyDocumentId] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     const [baseline, docs] = await Promise.all([
@@ -41,14 +71,77 @@ export function BaselineView() {
     };
   }, [reload]);
 
+  function applyExtractionResult(result: { warnings?: string[]; facts?: FactView[] }) {
+    const warnings = result.warnings ?? [];
+    setExtractionWarnings(warnings);
+    if (warnings.length > 0) {
+      toast.warning(warnings.length === 1 ? "Extraction finished with a warning" : "Extraction finished with warnings");
+    } else if ((result.facts?.length ?? 0) > 0) {
+      toast.success("New draft facts were added from extraction");
+    }
+  }
+
+  async function postUpload(
+    file: File,
+    options?: { duplicateAction?: "replace" | "keep_both"; replaceDocumentId?: string },
+  ) {
+    const body = new FormData();
+    body.set("file", file);
+    if (options?.duplicateAction) body.set("duplicateAction", options.duplicateAction);
+    if (options?.replaceDocumentId) body.set("replaceDocumentId", options.replaceDocumentId);
+    return api<UploadResponse>("/api/documents", { method: "POST", body });
+  }
+
   async function upload(files: File[]) {
     for (const file of files) {
-      const body = new FormData();
-      body.set("file", file);
-      await api("/api/documents", { method: "POST", body });
+      const result = await postUpload(file);
+      if ("duplicate" in result && result.duplicate) {
+        setPendingDuplicate({ file, existingDocument: result.existingDocument });
+        return;
+      }
+      applyExtractionResult(result);
     }
     toast.success(files.length === 1 ? "Document stored" : `${files.length} documents stored`);
     await reload();
+  }
+
+  async function resolveDuplicate(action: "replace" | "keep_both") {
+    if (!pendingDuplicate) return;
+    const { file, existingDocument } = pendingDuplicate;
+    setPendingDuplicate(null);
+    const result = await postUpload(file, {
+      duplicateAction: action,
+      replaceDocumentId: action === "replace" ? existingDocument.id : undefined,
+    });
+    if ("duplicate" in result && result.duplicate) {
+      toast.error("That file is still a duplicate of a stored document.");
+      return;
+    }
+    applyExtractionResult(result);
+    toast.success(action === "replace" ? "Document replaced and re-extracted" : "Second copy stored");
+    await reload();
+  }
+
+  async function extractAgain(documentId: string) {
+    setBusyDocumentId(documentId);
+    try {
+      const result = await api<ExtractResponse>(`/api/documents/${documentId}/extract`, { method: "POST" });
+      applyExtractionResult(result);
+      await reload();
+    } finally {
+      setBusyDocumentId(null);
+    }
+  }
+
+  async function removeDocument(documentId: string) {
+    setBusyDocumentId(documentId);
+    try {
+      await api(`/api/documents/${documentId}`, { method: "DELETE" });
+      toast.success("Document removed. Accepted facts stay in your baseline.");
+      await reload();
+    } finally {
+      setBusyDocumentId(null);
+    }
   }
 
   function onDrop(event: DragEvent) {
@@ -68,6 +161,25 @@ export function BaselineView() {
         description="Roles Keel cites when it scores a job. Conflicts stay as questions until you answer them. Nothing is merged in silence."
       />
       {error ? <p className="mb-4 text-sm text-destructive">{error}</p> : null}
+      {extractionWarnings.length > 0 ? (
+        <div
+          className="mb-4 rounded-xl border border-amber-300/80 bg-amber-50 p-4 text-amber-950 dark:border-amber-800/70 dark:bg-amber-950/35 dark:text-amber-50"
+          role="alert"
+        >
+          <p className="flex items-center gap-2 text-sm font-medium">
+            <TriangleAlert className="size-4 shrink-0" />
+            Extraction notes
+          </p>
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-sm leading-6">
+            {extractionWarnings.map((warning) => (
+              <li key={warning}>{warning}</li>
+            ))}
+          </ul>
+          <Button type="button" variant="ghost" size="sm" className="mt-2" onClick={() => setExtractionWarnings([])}>
+            Dismiss
+          </Button>
+        </div>
+      ) : null}
       <div
         onDragEnter={(event) => {
           event.preventDefault();
@@ -103,16 +215,75 @@ export function BaselineView() {
             Browse files
           </span>
         </label>
-        {documents.length > 0 && (
-          <ul className="mt-4 flex flex-wrap justify-center gap-2">
+        {documents.length > 0 ? (
+          <ul className="mt-6 space-y-2 text-left">
             {documents.map((document) => (
-              <li key={document.id} className="rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">
-                {document.filename}
+              <li
+                key={document.id}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-muted px-3 py-2 text-sm"
+              >
+                <div className="min-w-0">
+                  <p className="truncate font-medium">{document.filename}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {Math.round(document.byteSize / 1024)} KB · uploaded {new Date(document.createdAt).toLocaleString()}
+                  </p>
+                </div>
+                <div className="flex shrink-0 gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={busyDocumentId === document.id}
+                    onClick={() => {
+                      void extractAgain(document.id).catch((reason: unknown) => toast.error(String(reason)));
+                    }}
+                  >
+                    Extract again
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={busyDocumentId === document.id}
+                    onClick={() => {
+                      if (
+                        window.confirm(
+                          "Remove this stored file? Facts you already confirmed stay in the baseline; only the file link is removed.",
+                        )
+                      ) {
+                        void removeDocument(document.id).catch((reason: unknown) => toast.error(String(reason)));
+                      }
+                    }}
+                  >
+                    Delete
+                  </Button>
+                </div>
               </li>
             ))}
           </ul>
-        )}
+        ) : null}
       </div>
+
+      <Dialog open={pendingDuplicate !== null} onOpenChange={(open) => !open && setPendingDuplicate(null)}>
+        <DialogContent showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle>You already uploaded this file</DialogTitle>
+            <DialogDescription>
+              Keel recognized the same content as{" "}
+              <span className="font-medium text-foreground">{pendingDuplicate?.existingDocument.filename}</span>. Replace
+              updates that document and re-runs extraction. Keep both stores a second copy.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:justify-end">
+            <Button type="button" variant="outline" onClick={() => void resolveDuplicate("keep_both")}>
+              Keep both
+            </Button>
+            <Button type="button" onClick={() => void resolveDuplicate("replace")}>
+              Replace existing
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {open.map((question) => (
         <form
@@ -129,10 +300,28 @@ export function BaselineView() {
               .catch((reason: unknown) => toast.error(String(reason)));
           }}
         >
-          <p className="flex items-center gap-2 text-sm font-medium">
-            <TriangleAlert className="size-4" />
-            Clarifying question
-          </p>
+          <div className="flex items-start justify-between gap-3">
+            <p className="flex items-center gap-2 text-sm font-medium">
+              <TriangleAlert className="size-4 shrink-0" />
+              Clarifying question
+            </p>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="shrink-0 text-amber-950 hover:bg-amber-100/80 dark:text-amber-50"
+              onClick={() => {
+                void api(`/api/clarifications/${question.id}`, {
+                  method: "PATCH",
+                  body: JSON.stringify({ status: "dismissed" }),
+                })
+                  .then(() => reload())
+                  .catch((reason: unknown) => toast.error(String(reason)));
+              }}
+            >
+              Dismiss
+            </Button>
+          </div>
           <p className="mt-2 text-sm leading-6">{question.question}</p>
           {question.detail ? <p className="mt-1 text-sm leading-6 opacity-80">{question.detail}</p> : null}
           <textarea name="answer" required className="mt-3 min-h-16 w-full rounded-lg border bg-background px-3 py-2 text-sm text-foreground" />

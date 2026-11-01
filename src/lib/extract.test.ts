@@ -4,7 +4,11 @@ import {
   conflictQuestion,
   datesConflict,
   excerptIsInSource,
+  factIdentityKey,
+  factsMatchByIdentity,
+  isAutoExtractionQuestion,
   parseRoleBlocks,
+  sanitizeExtractionWarning,
 } from "@/lib/extract";
 
 const document = `ROLE: Senior TPM
@@ -50,6 +54,37 @@ describe("conflicts", () => {
     expect(
       datesConflict(existing, { ...existing, company: "Fabrikam", startDate: "2020", endDate: "2021" }),
     ).toBe(false);
+  });
+});
+
+describe("fact identity", () => {
+  it("treats matching title, company, and dates as the same role", () => {
+    const left = { title: "Engineer", company: "Contoso", startDate: "2019", endDate: "2024" };
+    const right = { title: " engineer ", company: "CONTOSO", startDate: "2019", endDate: "2024" };
+    expect(factIdentityKey(left)).toBe(factIdentityKey(right));
+    expect(factsMatchByIdentity(left, right)).toBe(true);
+    expect(factsMatchByIdentity(left, { ...left, endDate: "2020" })).toBe(false);
+  });
+});
+
+describe("auto extraction questions", () => {
+  it("recognizes stale auto-generated prompts", () => {
+    expect(
+      isAutoExtractionQuestion(
+        "This document was stored, but no roles were extracted. Add facts by hand, or set AI_PROVIDER and extract again.",
+      ),
+    ).toBe(true);
+    expect(isAutoExtractionQuestion("Two records disagree on the dates")).toBe(false);
+  });
+});
+
+describe("sanitizeExtractionWarning", () => {
+  it("redacts likely API keys from provider errors", () => {
+    const sanitized = sanitizeExtractionWarning(
+      "Model extraction failed (Bearer sk-testkey123456789012345678901234567890). Add facts by hand.",
+    );
+    expect(sanitized).not.toContain("sk-testkey");
+    expect(sanitized).toContain("[redacted]");
   });
 });
 

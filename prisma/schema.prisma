@@ -36,10 +36,13 @@ model Document {
   byteSize    Int
   storagePath String
   textContent String
+  /// SHA-256 of stored file bytes. Null on rows created before hashing existed.
+  contentHash String?
   createdAt   DateTime @default(now())
   facts       BaselineFact[]
 
   @@index([userId])
+  @@index([userId, contentHash])
 }
 
 model BaselineFact {
