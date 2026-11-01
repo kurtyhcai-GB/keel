@@ -5,7 +5,7 @@ Thanks for trying Keel and for sending feedback. The useful reports are the ones
 ## Ground rules
 
 - Do not invent employers, dates, titles, metrics, or scope. If a change touches extraction, scoring, or tailoring, the output has to stay inside the user's documents and the facts they confirmed.
-- Do not commit `.env`, API keys, `data/*.sqlite`, or files under `data/uploads/`.
+- Do not commit `.env`, API keys, `data/*.sqlite`, `data/level-map-overrides.json`, or files under `data/uploads/`.
 - This repository is AGPL-3.0. Contributions are under that license.
 
 ## Setup
@@ -31,7 +31,7 @@ npm run typecheck
 - Product behavior: `docs/design.md`
 - Prompts: `prompts/`. Keep them out of the TypeScript that calls the provider.
 - Providers: `src/lib/ai/`. Add a class that implements `AiProvider`, then teach `resolveProvider` about a new `AI_PROVIDER` value and document it in `.env.example`.
-- Level comparisons: `data/level-map.json`. New rows need `verification` and a note. Do not present an unverified example as an anchor.
+- Level comparisons: `data/level-map.json` is the researched map. Edits from the Level map page belong in `data/level-map-overrides.json` on the machine that runs Keel. New researched rows need `verification` and a note. Do not present an unverified example as an anchor.
 - Schema: `prisma/schema.prisma`. New tables still need `userId`.
 
 ## Score feedback

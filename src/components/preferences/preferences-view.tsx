@@ -1,25 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { api } from "@/lib/client-api";
 import type { PreferenceView, WorkMode } from "@/lib/types";
-
-type LevelEntry = {
-  id: string;
-  company: string;
-  companyLevel: string;
-  companyTitle?: string;
-  displayLabel: string;
-  confidence: "high" | "medium" | "low";
-  microsoftLevelMin: number;
-  microsoftLevelMax: number;
-  notes: string;
-  source: string;
-};
 
 const EMPTY: PreferenceView = {
   locations: [],
@@ -35,15 +23,13 @@ export function PreferencesView() {
   const [draft, setDraft] = useState<PreferenceView>(EMPTY);
   const [locationText, setLocationText] = useState("");
   const [saved, setSaved] = useState(false);
-  const [entries, setEntries] = useState<LevelEntry[]>([]);
-  const [disclaimer, setDisclaimer] = useState("");
-  const [editing, setEditing] = useState<LevelEntry | null>(null);
+  const [lowCount, setLowCount] = useState(0);
 
   useEffect(() => {
     let alive = true;
     void Promise.all([
       api<{ preferences: PreferenceView | null }>("/api/preferences"),
-      api<{ disclaimer: string; entries: LevelEntry[] }>("/api/level-map"),
+      api<{ entries: Array<{ confidence: string }> }>("/api/level-map"),
     ]).then(([prefs, map]) => {
       if (!alive) return;
       if (prefs.preferences) {
@@ -51,15 +37,12 @@ export function PreferencesView() {
         setLocationText(prefs.preferences.locations.join("\n"));
         setSaved(true);
       }
-      setDisclaimer(map.disclaimer);
-      setEntries(map.entries);
+      setLowCount(map.entries.filter((entry) => entry.confidence === "low").length);
     });
     return () => {
       alive = false;
     };
   }, []);
-
-  const low = entries.filter((entry) => entry.confidence === "low");
 
   async function persistWeight(skillsWeight: number) {
     setDraft((current) => ({ ...current, skillsWeight }));
@@ -201,75 +184,14 @@ export function PreferencesView() {
 
       <section className="mt-10">
         <h2 className="text-sm font-medium">Level map</h2>
-        <p className="mt-1 text-sm leading-6 text-muted-foreground">{disclaimer}</p>
-        <p className="mt-2 text-sm text-muted-foreground">{low.length} low-confidence rows need a look.</p>
-        <ul className="mt-4 flex flex-col gap-2">
-          {low.slice(0, 12).map((entry) => (
-            <li key={entry.id} className="rounded-lg px-3 py-2 ring-1 ring-amber-300/80">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-sm font-medium">
-                    {entry.company} {entry.companyLevel}
-                    <span className="ml-2 text-xs font-normal text-amber-800 dark:text-amber-200">low confidence</span>
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {entry.companyTitle} · {entry.displayLabel}
-                  </p>
-                </div>
-                <Button type="button" variant="outline" size="sm" onClick={() => setEditing(entry)}>
-                  Correct
-                </Button>
-              </div>
-            </li>
-          ))}
-        </ul>
+        <p className="mt-1 text-sm leading-6 text-muted-foreground">
+          Company levels are reviewed on the Level map page. Low-confidence rows are flagged there, and corrections stay on this machine.
+          {lowCount > 0 ? ` ${lowCount} low-confidence rows need a look.` : ""}
+        </p>
+        <Link href="/level-map" className="mt-3 inline-flex text-sm font-medium underline underline-offset-4">
+          Open the level map
+        </Link>
       </section>
-
-      {editing ? (
-        <form
-          className="mt-4 grid gap-3 rounded-xl p-4 ring-1 ring-foreground/10"
-          onSubmit={(event) => {
-            event.preventDefault();
-            const data = new FormData(event.currentTarget);
-            void api("/api/level-map", {
-              method: "PATCH",
-              body: JSON.stringify({
-                id: editing.id,
-                microsoftLevelMin: Number(data.get("min")),
-                microsoftLevelMax: Number(data.get("max")),
-                notes: String(data.get("notes") ?? ""),
-                confidence: String(data.get("confidence") ?? "low"),
-              }),
-            })
-              .then(() => api<{ entries: LevelEntry[]; disclaimer: string }>("/api/level-map"))
-              .then((map) => {
-                setEntries(map.entries);
-                setEditing(null);
-                toast.success("Level row updated on this machine");
-              })
-              .catch((reason: unknown) => toast.error(reason instanceof Error ? reason.message : "Could not save"));
-          }}
-        >
-          <p className="text-sm font-medium">
-            Correct {editing.company} {editing.companyLevel}
-          </p>
-          <div className="grid grid-cols-2 gap-3">
-            <input name="min" type="number" defaultValue={editing.microsoftLevelMin} className="rounded-lg border px-3 py-2 text-sm" />
-            <input name="max" type="number" defaultValue={editing.microsoftLevelMax} className="rounded-lg border px-3 py-2 text-sm" />
-          </div>
-          <textarea name="notes" defaultValue={editing.notes} className="min-h-20 rounded-lg border px-3 py-2 text-sm" />
-          <select name="confidence" defaultValue={editing.confidence} className="rounded-lg border px-3 py-2 text-sm">
-            <option value="low">low</option>
-            <option value="medium">medium</option>
-            <option value="high">high</option>
-          </select>
-          <p className="text-xs text-muted-foreground">Source: {editing.source}</p>
-          <div className="flex gap-2">
-            <Button type="submit" size="sm">Save correction</Button>
-            <Button type="button" variant="ghost" size="sm" onClick={() => setEditing(null)}>Cancel</Button>
-          </div>
-        </form>
-      ) : null}
     </div>
   );
 }

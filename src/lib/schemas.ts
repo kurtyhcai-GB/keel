@@ -66,17 +66,40 @@ export const demoInput = z.object({
   action: z.enum(["load", "clear"]),
 });
 
+const levelConfidence = z.enum(["high", "medium", "low"]);
+
+const levelRange = {
+  microsoftLevelMin: z.number().int().min(50).max(90),
+  microsoftLevelMax: z.number().int().min(50).max(90),
+  notes: z.string().max(4000).default(""),
+  confidence: levelConfidence,
+};
+
 export const levelEditInput = z
   .object({
-    id: z.string().min(1),
-    microsoftLevelMin: z.number().int().min(50).max(90),
-    microsoftLevelMax: z.number().int().min(50).max(90),
-    notes: z.string().max(4000),
-    confidence: z.enum(["high", "medium", "low"]),
+    id: z.string().trim().min(1).max(80),
+    companyLevel: z.string().trim().min(1).max(40),
+    companyTitle: z.string().trim().max(200).default(""),
+    ...levelRange,
   })
   .refine((value) => value.microsoftLevelMin <= value.microsoftLevelMax, {
     message: "microsoftLevelMin must be less than or equal to microsoftLevelMax",
   });
+
+export const levelAddInput = z
+  .object({
+    company: z.string().trim().min(1).max(120),
+    companyLevel: z.string().trim().min(1).max(40),
+    companyTitle: z.string().trim().max(200).default(""),
+    ...levelRange,
+  })
+  .refine((value) => value.microsoftLevelMin <= value.microsoftLevelMax, {
+    message: "microsoftLevelMin must be less than or equal to microsoftLevelMax",
+  });
+
+export const levelRowIdInput = z.object({
+  id: z.string().trim().min(1).max(80),
+});
 
 export const tailorInput = z.object({
   jobPostingId: z.string().min(1),
