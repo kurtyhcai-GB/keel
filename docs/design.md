@@ -28,7 +28,7 @@ One `Preference` row per user: locations, work modes (`remote`, `hybrid`, `onsit
 
 `skillsWeight` is the percent of overall fit that comes from the skills score. Preferences get the rest. The default is 65, so the blend is 65/35. Saving preferences recomputes `overallScore` on existing evaluations from the stored skills and preferences scores. It does not call a model. The tracked-jobs list sorts by that overall score, using the current weight at read time, so the order follows the slider.
 
-`data/level-map.json` is the crosswalk. Microsoft rows that map a Microsoft level onto itself are `anchor`. The `Microsoft L65 (IC5)` label is `example-from-owner`, because that display string came from the product brief and the IC nickname is community shorthand, not an official Microsoft title. Other companies are `unverified-example`. The scorer uses a row only when the posting also names that company, so "L64" at an unmapped employer is not silently called Microsoft L64.
+`data/level-map.json` is the crosswalk. Microsoft rows that map a Microsoft level onto itself are `anchor`. The `Microsoft L65 (IC5)` label is `example-from-owner`, because that display string came from the product brief and the IC nickname is community shorthand, not an official Microsoft title. Other companies are `unverified-example`. The scorer uses a row only when the posting also names that company, so "L64" at an unmapped employer is not silently called Microsoft L64. The Level map page reads that file plus `data/level-map-overrides.json`. Edits, added rows, and deletions live in the overrides file. The researched file stays as committed. The next evaluation calls `loadLevelMap()`, which applies those overrides.
 
 Commute tolerance is stored and not scored. TODO.
 
@@ -144,7 +144,8 @@ Skipping a job deletes the `JobPosting`. Evaluations, tailor output, and the tra
 | GET | `/api/clarifications` | List questions. |
 | PATCH | `/api/clarifications/:id` | Store an answer. Does not rewrite facts yet. |
 | GET, PUT | `/api/preferences` | Read or replace preferences. Saving recomputes stored overall scores. |
-| GET | `/api/level-map` | The JSON file, including the disclaimer. |
+| GET, POST, PATCH, DELETE | `/api/level-map` | Merged map. POST adds a row, PATCH edits one, DELETE removes one from scoring. |
+| POST | `/api/level-map/reset` | Drop one row's override and restore the researched value. |
 | POST | `/api/evaluate` | Score pasted text or a URL, or pause with `needs_decision`. |
 | POST | `/api/postings/:id/preference-decision` | `{ "continue": true }` scores a paused posting. `false` rules it out. |
 | POST | `/api/evaluations/:id/decision` | `{ "track": true \| false }`. |

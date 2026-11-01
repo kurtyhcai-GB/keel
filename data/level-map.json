@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "anchorCompany": "Microsoft",
-  "disclaimer": "Researched crosswalk reviewed by the owner and called mostly done. Low-confidence rows are flagged in Preferences. Correct them before you rely on a score. Bands move, and titles differ by job family.",
+  "disclaimer": "Researched crosswalk reviewed by the owner and called mostly done. Low-confidence rows are flagged on the Level map page. Correct them before you rely on a score. Bands move, and titles differ by job family.",
   "entries": [
     {
       "id": "microsoft-59",

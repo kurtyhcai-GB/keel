@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { useTheme } from "next-themes";
-import { Check, Moon, Sun } from "lucide-react";
+import { Check, Moon, Rows3, Sun } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -126,6 +126,26 @@ export function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
             </Link>
           );
         })}
+      </nav>
+
+      <p className="px-4 pt-4 pb-1 text-[11px] font-medium tracking-wide text-muted-foreground">Reference</p>
+      <nav aria-label="Reference" className="flex flex-col gap-0.5 px-2">
+        <Link
+          href="/level-map"
+          aria-current={pathname === "/level-map" ? "page" : undefined}
+          onClick={onNavigate}
+          className={cn(
+            "flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-sm",
+            pathname === "/level-map"
+              ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
+              : "text-muted-foreground hover:bg-sidebar-accent/70 hover:text-foreground",
+          )}
+        >
+          <span className="grid size-5 place-items-center text-muted-foreground" aria-hidden>
+            <Rows3 className="size-3.5" />
+          </span>
+          <span className="flex-1">Level map</span>
+        </Link>
       </nav>
 
       <div className="mt-auto border-t border-sidebar-border p-3">
