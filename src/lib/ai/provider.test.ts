@@ -17,7 +17,7 @@ describe("resolveProvider", () => {
     });
     const google = resolveProvider({ AI_PROVIDER: "google", GOOGLE_API_KEY: "test-key" });
     expect(google.mode).toBe("ready");
-    if (google.mode === "ready") expect(google.provider.model).toBe("gemini-3.7-flash");
+    if (google.mode === "ready") expect(google.provider.model).toBe("gemini-3.6-flash");
     const mock = resolveProvider({ AI_PROVIDER: "mock" });
     expect(mock.mode).toBe("ready");
     if (mock.mode === "ready") expect(mock.provider.id).toBe("mock");

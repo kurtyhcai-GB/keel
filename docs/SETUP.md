@@ -191,15 +191,14 @@ cp .env.example .env
 open -e .env
 ```
 
-Notepad or TextEdit opens. Find these lines and set them like this (paste your real key after the `=` with no spaces and no quotes):
+Notepad or TextEdit opens. Find these two lines and set them like this (paste your real key after the `=` with no spaces and no quotes):
 
 ```text
 AI_PROVIDER=google
 GOOGLE_API_KEY=your-key
-GOOGLE_MODEL=gemini-3.6-flash
 ```
 
-The example file ships with `AI_PROVIDER=local` and `GOOGLE_MODEL=gemini-3.7-flash`. Change both so they match the three lines above. `gemini-3.6-flash` is the free-tier model this guide uses.
+Leave `GOOGLE_MODEL=gemini-3.6-flash` as it already is. That is the free-tier model this guide uses.
 
 Save the file and close the editor.
 
