@@ -1,5 +1,5 @@
 import { postJson, splitMessages } from "@/lib/ai/http";
-import type { AiProvider, AiRequest, AiResult } from "@/lib/ai/types";
+import { DEFAULT_MAX_TOKENS, type AiProvider, type AiRequest, type AiResult } from "@/lib/ai/types";
 
 export class AnthropicProvider implements AiProvider {
   readonly id = "anthropic";
@@ -19,7 +19,7 @@ export class AnthropicProvider implements AiProvider {
       },
       {
         model: this.model,
-        max_tokens: request.maxTokens ?? 4096,
+        max_tokens: request.maxTokens ?? DEFAULT_MAX_TOKENS,
         temperature: request.temperature ?? 0.2,
         system,
         messages: [{ role: "user", content: user }],

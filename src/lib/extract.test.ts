@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   acceptExtractedFacts,
   conflictQuestion,
@@ -8,6 +8,7 @@ import {
   factsMatchByIdentity,
   isAutoExtractionQuestion,
   parseRoleBlocks,
+  proposeFacts,
   sanitizeExtractionWarning,
 } from "@/lib/extract";
 
@@ -85,6 +86,35 @@ describe("sanitizeExtractionWarning", () => {
     );
     expect(sanitized).not.toContain("sk-testkey");
     expect(sanitized).toContain("[redacted]");
+  });
+});
+
+describe("proposeFacts", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it("asks the provider for 16384 output tokens", async () => {
+    let maxOutputTokens = 0;
+    vi.stubEnv("AI_PROVIDER", "google");
+    vi.stubEnv("GOOGLE_API_KEY", "test-key");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        maxOutputTokens = (JSON.parse(String(init.body)) as { generationConfig: { maxOutputTokens: number } })
+          .generationConfig.maxOutputTokens;
+        return new Response(
+          JSON.stringify({
+            candidates: [{ content: { parts: [{ text: '{"facts":[],"questions":[]}' }] } }],
+          }),
+          { status: 200 },
+        );
+      }),
+    );
+    const result = await proposeFacts("Plain resume text with no role blocks.");
+    expect(maxOutputTokens).toBe(16384);
+    expect(result.facts).toEqual([]);
   });
 });
 

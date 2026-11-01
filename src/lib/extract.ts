@@ -258,6 +258,7 @@ export async function proposeFacts(documentText: string): Promise<{
     const result = await resolution.provider.complete({
       json: true,
       temperature: 0,
+      maxTokens: 16384,
       messages: [
         { role: "system", content: loadPrompt("extract-baseline") },
         { role: "user", content: `DOCUMENT:\n${documentText.slice(0, 80_000)}` },

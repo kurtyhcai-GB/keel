@@ -101,4 +101,63 @@ describe("provider requests", () => {
     expect(result.provider).toBe("openai-compatible");
     expect(result.text).toBe("local-ok");
   });
+
+  it("defaults output limits high enough for extraction and honors an override", async () => {
+    const bodies: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        bodies.push(JSON.parse(String(init.body)));
+        const body = bodies.at(-1) as { contents?: unknown };
+        if (body.contents) {
+          return new Response(
+            JSON.stringify({ candidates: [{ content: { parts: [{ text: "google-ok" }] } }] }),
+            { status: 200 },
+          );
+        }
+        if (String(init.body).includes("claude")) {
+          return new Response(JSON.stringify({ content: [{ type: "text", text: "anthropic-ok" }] }), {
+            status: 200,
+          });
+        }
+        return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), { status: 200 });
+      }),
+    );
+    await new GoogleProvider("k", "gemini-test").complete({
+      messages: [{ role: "user", content: "hi" }],
+    });
+    await new OpenAiProvider("k", "gpt-test").complete({
+      messages: [{ role: "user", content: "hi" }],
+    });
+    await new AnthropicProvider("k", "claude-test").complete({
+      messages: [{ role: "user", content: "hi" }],
+    });
+    await new OpenAiCompatibleProvider("http://127.0.0.1:9/v1", "llama").complete({
+      maxTokens: 512,
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(bodies[0]).toMatchObject({ generationConfig: { maxOutputTokens: 16384 } });
+    expect(bodies[1]).toMatchObject({ max_tokens: 16384 });
+    expect(bodies[2]).toMatchObject({ max_tokens: 16384 });
+    expect(bodies[3]).toMatchObject({ max_tokens: 512 });
+  });
+
+  it("refuses a Google reply that hit the output token limit", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        return new Response(
+          JSON.stringify({
+            candidates: [{ finishReason: "MAX_TOKENS", content: { parts: [{ text: '{"facts":' }] } }],
+          }),
+          { status: 200 },
+        );
+      }),
+    );
+    await expect(
+      new GoogleProvider("k", "gemini-test").complete({
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    ).rejects.toThrow(/cut off \(output token limit\)/);
+  });
 });

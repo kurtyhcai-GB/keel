@@ -1,5 +1,5 @@
 import { postJson, readOpenAiText } from "@/lib/ai/http";
-import type { AiProvider, AiRequest, AiResult } from "@/lib/ai/types";
+import { DEFAULT_MAX_TOKENS, type AiProvider, type AiRequest, type AiResult } from "@/lib/ai/types";
 
 export async function completeOpenAiChat(options: {
   providerId: string;
@@ -12,7 +12,7 @@ export async function completeOpenAiChat(options: {
   const body: Record<string, unknown> = {
     model: options.model,
     temperature: options.request.temperature ?? 0.2,
-    max_tokens: options.request.maxTokens ?? 4096,
+    max_tokens: options.request.maxTokens ?? DEFAULT_MAX_TOKENS,
     messages: options.request.messages,
   };
   if (options.request.json) {

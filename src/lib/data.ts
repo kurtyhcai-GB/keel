@@ -485,12 +485,23 @@ export async function saveUpload(file: File, options: SaveUploadOptions = {}): P
   return { document: serializeDocument(document), ...extracted };
 }
 
-export async function deleteDocument(id: string) {
+export async function deleteDocument(id: string): Promise<{
+  confirmedKept: number;
+  draftsRemoved: number;
+}> {
   const user = await getLocalUser();
   const document = await getPrisma().document.findFirst({ where: { id, userId: user.id } });
   if (!document) throw new AppError("Document not found.", 404);
+  const owned = { userId: user.id, documentId: id };
+  const confirmedKept = await getPrisma().baselineFact.count({
+    where: { ...owned, status: "confirmed" },
+  });
+  const drafts = await getPrisma().baselineFact.deleteMany({
+    where: { ...owned, status: "draft" },
+  });
   await unlink(document.storagePath).catch(() => undefined);
   await getPrisma().document.delete({ where: { id } });
+  return { confirmedKept, draftsRemoved: drafts.count };
 }
 
 export async function reextractDocument(id: string) {
