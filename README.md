@@ -4,6 +4,8 @@ Keel is a self-hosted job search for one person. You keep a source-cited record 
 
 It is meant to be cloned, run locally, and argued with. A later hosted version may be a small paid subscription. Version 1 has no sign-in and no billing.
 
+**New here?** Follow the step-by-step guide: **[docs/SETUP.md](docs/SETUP.md)**. It assumes you have never used a terminal, Git, or Node, and it has separate Windows and Mac steps. When you are done, the app is at [http://localhost:4317](http://localhost:4317).
+
 ## What it does
 
 The owner's list numbered tailoring as item 6. There is no item 5 in the current scope.
@@ -22,16 +24,20 @@ In self-hosted mode, resumes, baselines, postings, and letters stay on the machi
 
 With `AI_PROVIDER=local` (the default) or `mock`, Keel does not send that text anywhere. If you set a model provider, the prompt for that call includes the baseline and the posting, and it goes to that provider. A future hosted service would have to say so plainly. This README's privacy promise is about the copy you run yourself.
 
-## Quick start
+## Setup
 
-Requires Node.js 22.
+Install, API keys, updates, and troubleshooting are in **[docs/SETUP.md](docs/SETUP.md)**. Short version, once Node.js 22 and Git are installed:
 
 ```bash
+git clone https://github.com/kurtyhcai-GB/keel.git
+cd keel
 npm install
+npx prisma generate
+npx prisma db push
 npm run dev
 ```
 
-Open <http://localhost:4317>. `npm install` generates the Prisma client. `npm run dev` creates the database and starts the app. You do not need a `.env` file until you want a model. The first screen is empty. Use **Load sample** in the sidebar for a labeled senior TPM example, then clear it before you add your own record.
+Open <http://localhost:4317>. You do not need a `.env` file until you want a model. Copy `.env.example` to `.env` when you do. Real keys stay out of git. The first screen is empty. Use **Load sample** in the sidebar for a labeled senior TPM example, then clear it before you add your own record.
 
 Try one evaluation:
 
@@ -52,43 +58,7 @@ SKILLS: technical program management, cross-org execution
 SUMMARY: Led the platform program.
 ```
 
-### Docker
-
-```bash
-docker compose up --build
-```
-
-The app listens on port 4317. The compose file mounts `./data`, so the database and uploads survive a rebuild. Put API keys in a `.env` file next to `docker-compose.yml` if you want a provider. Compose passes those variables through. Without them, the local heuristic is used.
-
-## Configuration
-
-Copy `.env.example` to `.env` when you need to change a setting. Real keys stay out of git.
-
-| Variable | Purpose |
-| --- | --- |
-| `AI_PROVIDER` | `local` (default), `mock`, `openai`, `anthropic`, `google`, or `openai-compatible` |
-| `OPENAI_API_KEY`, `OPENAI_MODEL` | OpenAI. Default model `gpt-4o-mini`. |
-| `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` | Anthropic. Default model `claude-sonnet-4-5`. Set the model to one your account can call. |
-| `GOOGLE_API_KEY`, `GOOGLE_MODEL` | Google AI. Default model `gemini-3.7-flash`. |
-| `OPENAI_COMPATIBLE_BASE_URL`, `OPENAI_COMPATIBLE_API_KEY`, `OPENAI_COMPATIBLE_MODEL` | Any OpenAI-compatible server, including a local one such as `http://127.0.0.1:11434/v1`. The key may be empty. |
-| `DATABASE_URL` | Default `file:./data/keel.sqlite`. See [Postgres](docs/design.md#postgres) before pointing this at Postgres. |
-| `LOCAL_USER_ID`, `LOCAL_USER_NAME` | The single local user. Default id `local`. |
-| `PORT` | `npm run dev` and `npm start` use 4317. |
-
-`mock` runs the adapter and the JSON parser without a network call. It does not invent a work history. `local` is the deterministic heuristic in `src/lib/evaluate.ts`. If you set a provider but omit its key, evaluation returns an error instead of quietly switching scorers.
-
-Prompts live in `prompts/` and are loaded at call time. They are not embedded in the provider classes.
-
-## Scripts
-
-| Command | What it does |
-| --- | --- |
-| `npm run dev` | Create the database if needed and start the app on port 4317 |
-| `npm run build` / `npm start` | Production build and server |
-| `npm test` | Unit tests |
-| `npm run lint` | ESLint |
-| `npm run typecheck` | Prisma generate, Next typegen, `tsc --noEmit` |
-| `npm run db:push` | Apply `prisma/schema.prisma` to the SQLite file |
+Docker (`docker compose up --build`) is covered at the end of [docs/SETUP.md](docs/SETUP.md). Provider variables, the default SQLite file (`data/keel.sqlite`), and the script list are in that guide and in `.env.example`. `npm run dev` listens on port 4317 and creates the database if needed. Postgres notes stay in [docs/design.md](docs/design.md#postgres).
 
 ## Roadmap
 
