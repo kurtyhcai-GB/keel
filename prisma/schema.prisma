@@ -1,0 +1,199 @@
+// SQLite by default. Switching to Postgres is a schema provider change plus
+// DATABASE_URL and the adapter in src/lib/db.ts. See docs/design.md.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+/// v1 has one local user and no sign-in. The id is still on every child row
+/// so accounts can be added later without a rewrite.
+model User {
+  id          String   @id
+  displayName String
+  createdAt   DateTime @default(now())
+
+  documents     Document[]
+  facts         BaselineFact[]
+  questions     ClarificationQuestion[]
+  preference    Preference?
+  postings      JobPosting[]
+  evaluations   Evaluation[]
+  trackedJobs   TrackedJob[]
+  tailorOutputs TailorOutput[]
+}
+
+model Document {
+  id          String   @id
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  filename    String
+  mimeType    String
+  byteSize    Int
+  storagePath String
+  textContent String
+  createdAt   DateTime @default(now())
+  facts       BaselineFact[]
+
+  @@index([userId])
+}
+
+model BaselineFact {
+  id            String    @id
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  documentId    String?
+  document      Document? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  kind          String
+  title         String?
+  company       String?
+  startDate     String?
+  endDate       String?
+  location      String?
+  summary       String
+  skillsJson    String    @default("[]")
+  impact        String?
+  sourceExcerpt String
+  sourceLocator String?
+  /// draft until the user confirms an extraction. Hand entry starts confirmed.
+  status        String    @default("draft")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  questions     ClarificationQuestion[]
+
+  @@index([userId])
+  @@index([documentId])
+}
+
+model ClarificationQuestion {
+  id             String        @id
+  userId         String
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  factId         String?
+  fact           BaselineFact? @relation(fields: [factId], references: [id], onDelete: SetNull)
+  /// JSON array of fact ids. Conflicts are questions, not silent merges.
+  relatedFactIds String        @default("[]")
+  question       String
+  detail         String?
+  answer         String?
+  /// open | answered | dismissed
+  status         String        @default("open")
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([userId])
+  @@index([status])
+}
+
+model Preference {
+  id                      String   @id
+  userId                  String   @unique
+  user                    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  locationsJson           String   @default("[]")
+  /// JSON array of remote | hybrid | onsite
+  workModesJson           String   @default("[\"remote\",\"hybrid\",\"onsite\"]")
+  commuteToleranceMinutes Int?
+  /// Microsoft-equivalent levels, for example 63 and 65.
+  targetLevelMin          Int      @default(63)
+  targetLevelMax          Int      @default(65)
+  /// Percent of the overall score that comes from skills. The rest is preferences. Default 65.
+  skillsWeight            Int      @default(65)
+  notes                   String?
+  updatedAt               DateTime @updatedAt
+}
+
+model JobPosting {
+  id             String   @id
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// paste | url
+  sourceType     String
+  sourceUrl      String?
+  rawText        String
+  title          String?
+  company        String?
+  requisitionId  String?
+  location       String?
+  worksite       String?
+  levelRaw       String?
+  microsoftLevel Int?
+  levelLabel     String?
+  /// pending | awaiting_preference | tracked | ruled_out.
+  /// Skipping a scored job deletes the row. Ruling one out keeps it with a reason and no score.
+  status            String  @default("pending")
+  ruledOutReason    String?
+  /// JSON array of location or worksite mismatches shown when status is awaiting_preference.
+  preferenceHoldJson String @default("[]")
+  createdAt         DateTime @default(now())
+
+  evaluation    Evaluation?
+  trackedJob    TrackedJob?
+  tailorOutputs TailorOutput[]
+
+  @@index([userId])
+  @@index([status])
+}
+
+model Evaluation {
+  id               String     @id
+  userId           String
+  user             User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobPostingId     String     @unique
+  jobPosting       JobPosting @relation(fields: [jobPostingId], references: [id], onDelete: Cascade)
+  overallScore     Int
+  skillsScore      Int
+  /// Null when the user has not saved preferences. Overall then follows skills only.
+  preferencesScore Int?
+  strengthsJson    String
+  gapsJson         String
+  dealBreakersJson String
+  summary          String
+  provider         String
+  model            String?
+  warningsJson     String     @default("[]")
+  /// Location or worksite mismatches the user chose to continue past.
+  mismatchesJson   String     @default("[]")
+  /// Preference breakdown (location, worksite, level, commute) used by the UI.
+  preferencePartsJson String  @default("[]")
+  createdAt        DateTime   @default(now())
+  trackedJob       TrackedJob?
+  tailorOutputs    TailorOutput[]
+
+  @@index([userId])
+}
+
+model TrackedJob {
+  id           String     @id
+  userId       String
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobPostingId String     @unique
+  jobPosting   JobPosting @relation(fields: [jobPostingId], references: [id], onDelete: Cascade)
+  evaluationId String     @unique
+  evaluation   Evaluation @relation(fields: [evaluationId], references: [id], onDelete: Cascade)
+  createdAt    DateTime   @default(now())
+
+  @@index([userId])
+}
+
+model TailorOutput {
+  id              String      @id
+  userId          String
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobPostingId    String
+  jobPosting      JobPosting  @relation(fields: [jobPostingId], references: [id], onDelete: Cascade)
+  evaluationId    String?
+  evaluation      Evaluation? @relation(fields: [evaluationId], references: [id], onDelete: SetNull)
+  resumeEditsJson String
+  coverLetter     String
+  provider        String
+  model           String?
+  warningsJson    String      @default("[]")
+  createdAt       DateTime    @default(now())
+
+  @@index([userId])
+  @@index([jobPostingId])
+}

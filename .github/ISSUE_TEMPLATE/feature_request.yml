@@ -1,0 +1,22 @@
+name: Feature request
+description: Suggest a change to the job-search flow, data model, or self-hosting setup
+title: "Feature: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do in a job search that Keel does not support?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+    validations:
+      required: true
+  - type: textarea
+    id: faithfulness
+    attributes:
+      label: Faithfulness
+      description: If this touches the baseline, evaluation, or a letter, how should Keel avoid inventing facts?

@@ -1,0 +1,12 @@
+node_modules
+.next
+.git
+agent-tools
+data/*.sqlite
+data/*.sqlite-*
+data/uploads
+.env
+.env.*
+!.env.example
+src/generated
+npm-debug.log
