@@ -1,0 +1,14 @@
+Senior Technical Program Manager
+Company: Northwind Instruments
+Location: Redmond, WA
+Worksite: Hybrid, 3 days in office
+Job ID: NW-18422
+Level: L64
+
+Northwind is hiring a technical program manager to coordinate firmware and cloud releases across several teams.
+
+Requirements:
+- Technical program management across several teams
+- Cross-org execution
+- Shipping on a schedule
+- Azure

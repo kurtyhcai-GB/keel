@@ -1,0 +1,55 @@
+name: This score seems wrong
+description: The fit score, a gap, a strength, or a deal-breaker does not match the baseline
+title: "Score feedback: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is a public issue. Do not paste a full resume or other private documents. Quote only the short excerpt needed to show the mismatch.
+  - type: input
+    id: overall
+    attributes:
+      label: Overall score
+      placeholder: "72"
+    validations:
+      required: true
+  - type: input
+    id: breakdown
+    attributes:
+      label: Skills score and preferences score
+      placeholder: "80 skills / 55 preferences"
+    validations:
+      required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: What produced the score
+      options:
+        - local heuristic
+        - mock
+        - openai
+        - anthropic
+        - google
+        - openai-compatible
+        - not sure
+    validations:
+      required: true
+  - type: textarea
+    id: posting
+    attributes:
+      label: Posting excerpt
+      description: A few requirements from the job text, not the whole private packet if you would rather not share it.
+    validations:
+      required: true
+  - type: textarea
+    id: mismatch
+    attributes:
+      label: What seems wrong
+      description: For example a strength that cites the wrong fact, a gap the baseline already records, or a level mapping you do not trust.
+    validations:
+      required: true
+  - type: textarea
+    id: fact
+    attributes:
+      label: Baseline fact that should have counted
+      description: Title, company, and the source sentence. Leave out anything you do not want public.

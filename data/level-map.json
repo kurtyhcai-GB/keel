@@ -1,0 +1,95 @@
+{
+  "schemaVersion": 1,
+  "anchorCompany": "Microsoft",
+  "disclaimer": "Most rows are illustrative placeholders. Public leveling guides disagree, and bands move. Verify every row before you trust a score. Microsoft IC nicknames such as IC5 are community shorthand, not official Microsoft titles.",
+  "entries": [
+    {
+      "id": "ms-63",
+      "company": "Microsoft",
+      "companyLevel": "63",
+      "companyTitle": "Senior",
+      "microsoftLevel": 63,
+      "displayLabel": "Microsoft L63",
+      "icNickname": null,
+      "verification": "anchor",
+      "notes": "Identity anchor: a Microsoft 63 maps to Microsoft level 63. Confirm the title you want shown."
+    },
+    {
+      "id": "ms-64",
+      "company": "Microsoft",
+      "companyLevel": "64",
+      "companyTitle": "Senior",
+      "microsoftLevel": 64,
+      "displayLabel": "Microsoft L64",
+      "icNickname": null,
+      "verification": "anchor",
+      "notes": "Identity anchor: a Microsoft 64 maps to Microsoft level 64."
+    },
+    {
+      "id": "ms-65",
+      "company": "Microsoft",
+      "companyLevel": "65",
+      "companyTitle": "Principal",
+      "microsoftLevel": 65,
+      "displayLabel": "Microsoft L65 (IC5)",
+      "icNickname": "IC5",
+      "verification": "example-from-owner",
+      "notes": "Display format from the owner (Microsoft L65 (IC5)). Confirm that IC5 is the nickname you want on L65."
+    },
+    {
+      "id": "ms-66",
+      "company": "Microsoft",
+      "companyLevel": "66",
+      "companyTitle": "Principal",
+      "microsoftLevel": 66,
+      "displayLabel": "Microsoft L66",
+      "icNickname": null,
+      "verification": "anchor",
+      "notes": "Identity anchor: a Microsoft 66 maps to Microsoft level 66."
+    },
+    {
+      "id": "google-l5",
+      "company": "Google",
+      "companyLevel": "L5",
+      "companyTitle": "Senior Software Engineer",
+      "microsoftLevel": 64,
+      "displayLabel": "Microsoft L64",
+      "icNickname": null,
+      "verification": "unverified-example",
+      "notes": "EXAMPLE ONLY. Often compared with Microsoft senior band. Replace with a source you trust."
+    },
+    {
+      "id": "amazon-l6",
+      "company": "Amazon",
+      "companyLevel": "L6",
+      "companyTitle": "SDE III",
+      "microsoftLevel": 64,
+      "displayLabel": "Microsoft L64",
+      "icNickname": null,
+      "verification": "unverified-example",
+      "notes": "EXAMPLE ONLY. Verify before use."
+    },
+    {
+      "id": "meta-e5",
+      "company": "Meta",
+      "companyLevel": "E5",
+      "companyTitle": "Senior",
+      "microsoftLevel": 63,
+      "displayLabel": "Microsoft L63",
+      "icNickname": null,
+      "verification": "unverified-example",
+      "notes": "EXAMPLE ONLY. Verify before use."
+    },
+    {
+      "id": "snowflake-l5",
+      "company": "Snowflake",
+      "companyLevel": "L5",
+      "companyTitle": "Senior",
+      "microsoftLevel": 64,
+      "displayLabel": "Microsoft L64",
+      "icNickname": null,
+      "verification": "unverified-example",
+      "notes": "EXAMPLE ONLY. Snowflake titles vary by job family. Verify before use."
+    }
+  ]
+}

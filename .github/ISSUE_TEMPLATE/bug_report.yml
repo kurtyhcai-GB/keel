@@ -1,0 +1,49 @@
+name: Bug report
+description: Something in Keel failed or behaved unexpectedly
+title: "Bug: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting this. Do not paste a resume, API key, or other private document. A short excerpt is enough.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Run `npm run dev`
+        2. Open Baseline
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Commit or version
+      placeholder: git rev-parse --short HEAD
+  - type: dropdown
+    id: provider
+    attributes:
+      label: AI provider
+      options:
+        - local heuristic
+        - mock
+        - openai
+        - anthropic
+        - google
+        - openai-compatible
+        - not sure
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or error text
+      description: Redact keys and personal history.
