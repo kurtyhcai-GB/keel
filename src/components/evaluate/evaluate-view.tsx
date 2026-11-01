@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { EvaluationView } from "@/components/evaluation-view";
@@ -49,6 +50,7 @@ Requirements:
 `;
 
 export function EvaluateView() {
+  const router = useRouter();
   const [text, setText] = useState("");
   const [phase, setPhase] = useState<"idle" | "loading" | "pause" | "ruled-out" | "result">("idle");
   const [pause, setPause] = useState<NeedsDecision | null>(null);
@@ -56,6 +58,15 @@ export function EvaluateView() {
   const [result, setResult] = useState<Scored | null>(null);
   const [weight, setWeight] = useState(65);
   const [preferencesSaved, setPreferencesSaved] = useState(false);
+  const [deciding, setDeciding] = useState(false);
+
+  function resetEvaluation() {
+    setText("");
+    setResult(null);
+    setPause(null);
+    setRuled(null);
+    setPhase("idle");
+  }
 
   async function run() {
     const trimmed = text.trim();
@@ -104,15 +115,28 @@ export function EvaluateView() {
   }
 
   async function track(keep: boolean) {
-    if (!result) return;
-    await api(`/api/evaluations/${result.evaluationId}/decision`, {
-      method: "POST",
-      body: JSON.stringify({ track: keep }),
-    });
-    toast.success(keep ? "Tracked" : "Discarded");
-    if (!keep) {
-      setResult(null);
-      setPhase("idle");
+    if (!result || deciding) return;
+    setDeciding(true);
+    try {
+      await api(`/api/evaluations/${result.evaluationId}/decision`, {
+        method: "POST",
+        body: JSON.stringify({ track: keep }),
+      });
+      resetEvaluation();
+      if (keep) {
+        toast.success("Tracked", {
+          action: {
+            label: "Tracked Jobs",
+            onClick: () => router.push("/tracked"),
+          },
+        });
+      } else {
+        toast.success("Skipped");
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not save that choice");
+    } finally {
+      setDeciding(false);
     }
   }
 
@@ -202,6 +226,9 @@ export function EvaluateView() {
           <h2 className="text-xl font-semibold">Ruled out</h2>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">{ruled.reason}</p>
           <p className="mt-2 text-sm text-muted-foreground">No score was saved, and the role is not tracked.</p>
+          <Button type="button" className="mt-4" onClick={resetEvaluation}>
+            Evaluate another role
+          </Button>
         </section>
       )}
 
@@ -222,10 +249,10 @@ export function EvaluateView() {
             scored={{ ...result, skillsWeight: weight }}
             actions={
               <>
-                <Button type="button" onClick={() => void track(true)}>
+                <Button type="button" disabled={deciding} onClick={() => void track(true)}>
                   Track it
                 </Button>
-                <Button type="button" variant="outline" onClick={() => void track(false)}>
+                <Button type="button" variant="outline" disabled={deciding} onClick={() => void track(false)}>
                   Skip
                 </Button>
               </>
