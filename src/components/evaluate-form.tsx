@@ -2,20 +2,44 @@
 
 import { useState, type FormEvent } from "react";
 import { api } from "@/lib/client-api";
-import type { EvaluationDraft } from "@/lib/types";
+import type { EvaluationDraft, PreferenceMismatch } from "@/lib/types";
 
-type EvaluationResponse = EvaluationDraft & {
+type NeedsDecision = {
+  status: "needs_decision";
+  postingId: string;
+  mismatches: PreferenceMismatch[];
+  title: string | null;
+  company: string | null;
+  requisitionId: string | null;
+  location: string | null;
+  worksite: string | null;
+};
+
+type RuledOut = {
+  status: "ruled_out";
+  postingId: string;
+  reason: string;
+  mismatches: PreferenceMismatch[];
+};
+
+type Scored = EvaluationDraft & {
+  status: "pending";
   postingId: string;
   evaluationId: string;
-  status: string;
 };
+
+type EvaluateResult = NeedsDecision | RuledOut | Scored;
+
+function isScored(result: EvaluateResult): result is Scored {
+  return result.status === "pending" && "evaluationId" in result;
+}
 
 export function EvaluateForm() {
   const [text, setText] = useState("");
   const [url, setUrl] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-  const [result, setResult] = useState<EvaluationResponse | null>(null);
+  const [result, setResult] = useState<EvaluateResult | null>(null);
   const [decision, setDecision] = useState<string | null>(null);
 
   async function onSubmit(event: FormEvent) {
@@ -27,7 +51,7 @@ export function EvaluateForm() {
       const body: { text?: string; url?: string } = {};
       if (url.trim()) body.url = url.trim();
       else body.text = text;
-      const response = await api<EvaluationResponse>("/api/evaluate", {
+      const response = await api<EvaluateResult>("/api/evaluate", {
         method: "POST",
         body: JSON.stringify(body),
       });
@@ -40,8 +64,28 @@ export function EvaluateForm() {
     }
   }
 
+  async function resolveHold(continueEvaluation: boolean) {
+    if (!result || result.status !== "needs_decision") return;
+    setError(null);
+    setPending(true);
+    try {
+      const response = await api<Scored | RuledOut>(
+        `/api/postings/${result.postingId}/preference-decision`,
+        {
+          method: "POST",
+          body: JSON.stringify({ continue: continueEvaluation }),
+        },
+      );
+      setResult(response);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not save that choice");
+    } finally {
+      setPending(false);
+    }
+  }
+
   async function decide(track: boolean) {
-    if (!result) return;
+    if (!result || !isScored(result)) return;
     setError(null);
     try {
       await api(`/api/evaluations/${result.evaluationId}/decision`, {
@@ -75,11 +119,39 @@ export function EvaluateForm() {
           />
         </label>
         <button type="submit" disabled={pending}>
-          {pending ? "Scoring…" : "Score this posting"}
+          {pending ? "Checking…" : "Score this posting"}
         </button>
       </form>
       {error ? <p role="alert">{error}</p> : null}
-      {result ? (
+      {result?.status === "needs_decision" ? (
+        <section>
+          <h2>Continue evaluating {result.title || "this role"}?</h2>
+          <p>
+            {result.company || "Company unknown"} · {result.location || "Location unknown"} /{" "}
+            {result.worksite || "Worksite unknown"}
+          </p>
+          <p>This does not change the score by itself. Choose whether to keep going or rule the role out.</p>
+          <ul>
+            {result.mismatches.map((mismatch) => (
+              <li key={mismatch.reason}>{mismatch.reason}</li>
+            ))}
+          </ul>
+          <button type="button" onClick={() => resolveHold(true)} disabled={pending}>
+            Keep evaluating
+          </button>{" "}
+          <button type="button" onClick={() => resolveHold(false)} disabled={pending}>
+            Rule it out
+          </button>
+        </section>
+      ) : null}
+      {result?.status === "ruled_out" ? (
+        <section>
+          <h2>Ruled out</h2>
+          <p>{result.reason}</p>
+          <p>This role was not scored and will not be tracked.</p>
+        </section>
+      ) : null}
+      {result && isScored(result) ? (
         <section>
           <h2>
             {result.overallScore}% fit
@@ -97,6 +169,16 @@ export function EvaluateForm() {
             {result.location || "Location unknown"} / {result.worksite || "Worksite unknown"} ·{" "}
             {result.levelLabel || result.levelRaw || "Level unknown"}
           </p>
+          {result.mismatches.length ? (
+            <>
+              <h3>You continued despite</h3>
+              <ul>
+                {result.mismatches.map((mismatch) => (
+                  <li key={mismatch.reason}>{mismatch.reason}</li>
+                ))}
+              </ul>
+            </>
+          ) : null}
           <h3>Strengths</h3>
           <ul>
             {result.strengths.map((item) => (

@@ -1,10 +1,32 @@
 import { AppError } from "@/lib/errors";
 import { loadPrompt, parseModelJson, resolveProvider } from "@/lib/ai";
 import { loadLevelMap, matchLevel, type LevelMap } from "@/lib/level-map";
-import type { CitedFact, EvaluationDraft, PreferenceView, ScorePoint, WorkMode } from "@/lib/types";
+import type {
+  CitedFact,
+  EvaluationDraft,
+  PreferenceMismatch,
+  PreferenceView,
+  ScorePoint,
+  WorkMode,
+} from "@/lib/types";
 import { z } from "zod";
 
-export const SCORE_WEIGHTS = { skills: 0.65, preferences: 0.35 } as const;
+export const DEFAULT_SKILLS_WEIGHT = 65;
+export const SCORE_WEIGHTS = {
+  skills: DEFAULT_SKILLS_WEIGHT / 100,
+  preferences: (100 - DEFAULT_SKILLS_WEIGHT) / 100,
+} as const;
+
+export function blendOverall(
+  skillsScore: number,
+  preferencesScore: number | null,
+  skillsWeight = DEFAULT_SKILLS_WEIGHT,
+): number {
+  const skills = clampScore(skillsScore);
+  if (preferencesScore == null) return skills;
+  const weight = Math.max(0, Math.min(100, Math.round(skillsWeight)));
+  return clampScore(skills * (weight / 100) + clampScore(preferencesScore) * ((100 - weight) / 100));
+}
 
 const pointSchema = z.object({
   text: z.string().min(1),
@@ -88,6 +110,55 @@ function detectedModes(text: string): WorkMode[] {
   return modes;
 }
 
+function locationMatches(location: string, preferred: string[]): boolean {
+  const value = location.toLowerCase();
+  return preferred.some((item) => {
+    const wanted = item.toLowerCase();
+    return value.includes(wanted) || wanted.includes(value);
+  });
+}
+
+function remoteOnly(preferences: PreferenceView): boolean {
+  return preferences.workModes.length === 1 && preferences.workModes[0] === "remote";
+}
+
+/**
+ * Location outside the saved list, or hybrid/on-site when the user wants remote
+ * only, pauses evaluation. These are not score penalties and not automatic rule-outs.
+ */
+export function findPreferencePauses(input: {
+  jobText: string;
+  preferences: PreferenceView | null;
+  levelMap?: LevelMap;
+}): PreferenceMismatch[] {
+  if (!input.preferences) return [];
+  const parsed = parsePosting(input.jobText, input.levelMap ?? loadLevelMap());
+  const mismatches: PreferenceMismatch[] = [];
+  const modes = detectedModes(`${parsed.worksite ?? ""}\n${input.jobText}`);
+  if (remoteOnly(input.preferences) && (modes.includes("hybrid") || modes.includes("onsite"))) {
+    const how = modes.includes("hybrid") ? "hybrid" : "on-site";
+    mismatches.push({
+      kind: "worksite",
+      reason: `This posting is ${how}, and your preference is remote only.`,
+    });
+  }
+  if (
+    input.preferences.locations.length > 0 &&
+    parsed.location &&
+    !locationMatches(parsed.location, input.preferences.locations)
+  ) {
+    mismatches.push({
+      kind: "location",
+      reason: `The posting is in ${parsed.location}, which is outside your preferred locations (${input.preferences.locations.join("; ")}).`,
+    });
+  }
+  return mismatches;
+}
+
+export function ruledOutReason(mismatches: PreferenceMismatch[]): string {
+  return mismatches.map((mismatch) => mismatch.reason).join(" ");
+}
+
 function baselineBlob(facts: CitedFact[]): string {
   return facts
     .map((fact) =>
@@ -109,6 +180,7 @@ export function scoreLocally(input: {
   facts: CitedFact[];
   preferences: PreferenceView | null;
   levelMap?: LevelMap;
+  acknowledgedMismatches?: PreferenceMismatch[];
 }): EvaluationDraft {
   const map = input.levelMap ?? loadLevelMap();
   const parsed = parsePosting(input.jobText, map);
@@ -170,29 +242,17 @@ export function scoreLocally(input: {
     let penalty = 0;
     const modes = detectedModes(`${parsed.worksite ?? ""}\n${input.jobText}`);
     const allowed = new Set(input.preferences.workModes);
+    const heldForDecision =
+      remoteOnly(input.preferences) && (modes.includes("hybrid") || modes.includes("onsite"));
     if (modes.length === 0) {
       penalty += 10;
       warnings.push("The posting does not state a worksite, so that preference was only partly scored.");
-    } else if (!modes.some((mode) => allowed.has(mode))) {
+    } else if (!heldForDecision && !modes.some((mode) => allowed.has(mode))) {
       penalty += 50;
       dealBreakers.push({
         text: `Your preferences allow ${input.preferences.workModes.join(", ")}. This posting reads as ${modes.join(" and ")}.`,
         factIds: [],
       });
-    }
-    if (input.preferences.locations.length > 0 && parsed.location) {
-      const location = parsed.location.toLowerCase();
-      const hit = input.preferences.locations.some((item) => {
-        const wanted = item.toLowerCase();
-        return location.includes(wanted) || wanted.includes(location);
-      });
-      const remoteOnly = modes.length === 1 && modes[0] === "remote";
-      if (!hit && !remoteOnly) {
-        penalty += 25;
-        warnings.push(
-          `The posting location "${parsed.location}" is outside the saved locations. This is a penalty, not a deal-breaker, in this version.`,
-        );
-      }
     }
     if (parsed.microsoftLevel == null) {
       warnings.push("No Microsoft-equivalent level was mapped, so level was not scored.");
@@ -214,16 +274,14 @@ export function scoreLocally(input: {
     preferencesScore = clampScore(100 - penalty);
   }
 
-  const overallScore =
-    preferencesScore == null
-      ? skillsScore
-      : clampScore(skillsScore * SCORE_WEIGHTS.skills + preferencesScore * SCORE_WEIGHTS.preferences);
+  const skillsWeight = input.preferences?.skillsWeight ?? DEFAULT_SKILLS_WEIGHT;
+  const overallScore = blendOverall(skillsScore, preferencesScore, skillsWeight);
 
   const summary = [
     `Skills and experience match is ${skillsScore} out of 100 against ${input.facts.length} baseline fact${input.facts.length === 1 ? "" : "s"}.`,
     preferencesScore == null
       ? "Preferences are not set, so the overall score follows skills only."
-      : `Preferences match is ${preferencesScore} out of 100. Overall is ${overallScore}, using a provisional ${SCORE_WEIGHTS.skills}/${SCORE_WEIGHTS.preferences} blend.`,
+      : `Preferences match is ${preferencesScore} out of 100. Overall is ${overallScore}, using your ${skillsWeight}/${100 - skillsWeight} skills-to-preferences weight.`,
     "This local score only restates the baseline and the posting. It does not add employers or scope.",
   ].join(" ");
 
@@ -237,6 +295,7 @@ export function scoreLocally(input: {
     gaps,
     dealBreakers,
     warnings,
+    mismatches: input.acknowledgedMismatches ?? [],
     provider: "local",
     model: null,
   };
@@ -262,9 +321,38 @@ function keepKnown(points: ScorePoint[], ids: Set<string>, dropIfEmpty: boolean,
   return kept;
 }
 
+function dropAcknowledgedDealBreakers(
+  points: ScorePoint[],
+  mismatches: PreferenceMismatch[],
+  warnings: string[],
+): ScorePoint[] {
+  if (mismatches.length === 0) return points;
+  const kinds = new Set(mismatches.map((mismatch) => mismatch.kind));
+  const kept: ScorePoint[] = [];
+  for (const point of points) {
+    const text = point.text.toLowerCase();
+    const aboutWorksite =
+      kinds.has("worksite") && /remote|hybrid|on-?site|worksite|in[- ]office/.test(text);
+    const aboutLocation = kinds.has("location") && /location|relocat/.test(text);
+    if (aboutWorksite || aboutLocation) {
+      warnings.push(
+        "A model deal-breaker was set aside because you chose to continue past that location or worksite mismatch.",
+      );
+      continue;
+    }
+    kept.push(point);
+  }
+  return kept;
+}
+
 export function normalizeModelEvaluation(
   raw: unknown,
-  input: { facts: CitedFact[]; preferences: PreferenceView | null; jobText: string },
+  input: {
+    facts: CitedFact[];
+    preferences: PreferenceView | null;
+    jobText: string;
+    acknowledgedMismatches?: PreferenceMismatch[];
+  },
   local: EvaluationDraft,
   meta: { provider: string; model: string },
 ): EvaluationDraft {
@@ -276,7 +364,12 @@ export function normalizeModelEvaluation(
   const ids = knownIds(input.facts);
   const strengths = keepKnown(parsed.data.strengths, ids, true, warnings);
   const gaps = keepKnown(parsed.data.gaps, ids, false, warnings);
-  const dealBreakers = keepKnown(parsed.data.dealBreakers, ids, false, warnings);
+  const acknowledged = input.acknowledgedMismatches ?? [];
+  const dealBreakers = dropAcknowledgedDealBreakers(
+    keepKnown(parsed.data.dealBreakers, ids, false, warnings),
+    acknowledged,
+    warnings,
+  );
   const skillsScore = clampScore(parsed.data.skillsScore);
   let preferencesScore =
     parsed.data.preferencesScore == null ? null : clampScore(parsed.data.preferencesScore);
@@ -286,19 +379,11 @@ export function normalizeModelEvaluation(
     }
     preferencesScore = null;
   }
-  let overallScore = clampScore(parsed.data.overallScore);
-  if (preferencesScore == null) {
-    overallScore = skillsScore;
-  } else {
-    const expected = clampScore(
-      skillsScore * SCORE_WEIGHTS.skills + preferencesScore * SCORE_WEIGHTS.preferences,
-    );
-    if (Math.abs(expected - overallScore) > 15) {
-      warnings.push(
-        `The model overall of ${overallScore} is far from the provisional ${SCORE_WEIGHTS.skills}/${SCORE_WEIGHTS.preferences} blend (about ${expected}).`,
-      );
-    }
-  }
+  const overallScore = blendOverall(
+    skillsScore,
+    preferencesScore,
+    input.preferences?.skillsWeight ?? DEFAULT_SKILLS_WEIGHT,
+  );
   const value = parsed.data;
   return {
     title: value.title ?? local.title,
@@ -317,6 +402,7 @@ export function normalizeModelEvaluation(
     gaps,
     dealBreakers,
     warnings,
+    mismatches: acknowledged,
     provider: meta.provider,
     model: meta.model,
   };
@@ -327,9 +413,15 @@ function buildEvaluationMessage(input: {
   facts: CitedFact[];
   preferences: PreferenceView | null;
   levelMap: LevelMap;
+  acknowledgedMismatches?: PreferenceMismatch[];
 }): string {
+  const held = input.acknowledgedMismatches ?? [];
   return [
     "Respond with JSON only.",
+    "The server recomputes overallScore from skillsScore, preferencesScore, and the user's skillsWeight. Still return both scores.",
+    held.length
+      ? `ACKNOWLEDGED_MISMATCHES:\nThe user chose to keep evaluating despite these. Do not treat them as deal-breakers and do not lower preferencesScore because of them.\n${JSON.stringify(held)}`
+      : "ACKNOWLEDGED_MISMATCHES: none",
     "BASELINE_FACTS:",
     JSON.stringify(input.facts),
     "PREFERENCES:",
@@ -349,6 +441,7 @@ export async function produceEvaluation(input: {
   facts: CitedFact[];
   preferences: PreferenceView | null;
   levelMap?: LevelMap;
+  acknowledgedMismatches?: PreferenceMismatch[];
 }): Promise<EvaluationDraft> {
   const levelMap = input.levelMap ?? loadLevelMap();
   const local = scoreLocally({ ...input, levelMap });

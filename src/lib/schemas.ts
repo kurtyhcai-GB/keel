@@ -33,6 +33,7 @@ export const preferenceInput = z
     commuteToleranceMinutes: z.number().int().min(0).max(240).nullable(),
     targetLevelMin: z.number().int().min(50).max(80),
     targetLevelMax: z.number().int().min(50).max(80),
+    skillsWeight: z.number().int().min(0).max(100).default(65),
     notes: z.string().max(2000).nullish(),
   })
   .refine((value) => value.targetLevelMin <= value.targetLevelMax, {
@@ -51,6 +52,10 @@ export const evaluateInput = z
 
 export const decisionInput = z.object({
   track: z.boolean(),
+});
+
+export const preferenceDecisionInput = z.object({
+  continue: z.boolean(),
 });
 
 export const tailorInput = z.object({

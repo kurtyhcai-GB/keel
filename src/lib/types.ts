@@ -48,7 +48,14 @@ export type PreferenceView = {
   commuteToleranceMinutes: number | null;
   targetLevelMin: number;
   targetLevelMax: number;
+  /// Percent of overall fit that comes from skills. Preferences get the rest.
+  skillsWeight: number;
   notes: string | null;
+};
+
+export type PreferenceMismatch = {
+  kind: "location" | "worksite";
+  reason: string;
 };
 
 export type ScorePoint = {
@@ -73,6 +80,7 @@ export type EvaluationDraft = {
   gaps: ScorePoint[];
   dealBreakers: ScorePoint[];
   warnings: string[];
+  mismatches: PreferenceMismatch[];
   provider: string;
   model: string | null;
 };
@@ -97,6 +105,7 @@ export type TrackedJobView = {
   gaps: ScorePoint[];
   dealBreakers: ScorePoint[];
   warnings: string[];
+  mismatches: PreferenceMismatch[];
   provider: string;
   createdAt: string;
 };

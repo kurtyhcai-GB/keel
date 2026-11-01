@@ -111,6 +111,13 @@ export function JobsTable() {
                         {job.preferencesScore == null ? "" : ` · Preferences ${job.preferencesScore}`} ·{" "}
                         {job.provider}
                       </p>
+                      {job.mismatches.length ? (
+                        <ul>
+                          {job.mismatches.map((mismatch) => (
+                            <li key={mismatch.reason}>Continued despite this: {mismatch.reason}</li>
+                          ))}
+                        </ul>
+                      ) : null}
                     </td>
                   </tr>
                 ) : null}

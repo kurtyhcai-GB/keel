@@ -9,6 +9,6 @@ export function GET() {
 export function PUT(request: Request) {
   return handle(async () => {
     const input = preferenceInput.parse(await readJson(request));
-    return Response.json({ preferences: await savePreferences(input) });
+    return Response.json(await savePreferences(input));
   });
 }

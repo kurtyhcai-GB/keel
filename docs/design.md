@@ -24,7 +24,9 @@ Conflicts: two facts with the same normalized title and company and different no
 
 ### 2. Preferences
 
-One `Preference` row per user: locations, work modes (`remote`, `hybrid`, `onsite`), commute tolerance in minutes, and `targetLevelMin` / `targetLevelMax` on the Microsoft level scale.
+One `Preference` row per user: locations, work modes (`remote`, `hybrid`, `onsite`), commute tolerance in minutes, `targetLevelMin` / `targetLevelMax` on the Microsoft level scale, and `skillsWeight`.
+
+`skillsWeight` is the percent of overall fit that comes from the skills score. Preferences get the rest. The default is 65, so the blend is 65/35. Saving preferences recomputes `overallScore` on existing evaluations from the stored skills and preferences scores. It does not call a model. The tracked-jobs list sorts by that overall score, using the current weight at read time, so the order follows the slider.
 
 `data/level-map.json` is the crosswalk. Microsoft rows that map a Microsoft level onto itself are `anchor`. The `Microsoft L65 (IC5)` label is `example-from-owner`, because that display string came from the product brief and the IC nickname is community shorthand, not an official Microsoft title. Other companies are `unverified-example`. The scorer uses a row only when the posting also names that company, so "L64" at an unmapped employer is not silently called Microsoft L64.
 
@@ -36,24 +38,31 @@ Commute tolerance is stored and not scored. TODO.
 
 URL fetch (`src/lib/fetch-posting.ts`) allows only public `http` and `https` URLs, refuses local and private addresses, and checks each redirect the same way. It does not resolve DNS, so a public hostname that later points at a private address is still a gap. A blocked, empty, or non-text response returns HTTP 422 with `needsPaste: true` and does not invent a posting.
 
+Before any score is stored, `findPreferencePauses` checks two cases:
+
+- The posting names a location, the user has preferred locations, and the posting location matches none of them.
+- The user's only work mode is remote, and the posting reads as hybrid or on-site.
+
+If either is true, `POST /api/evaluate` does not score and does not call a model. It stores the posting as `awaiting_preference` and returns `status: "needs_decision"` with the reasons. The Evaluate page asks the user to keep evaluating or rule the role out.
+
+`POST /api/postings/:id/preference-decision` with `{ "continue": true }` then runs the score and stores an evaluation. The mismatches are saved on the evaluation and shown in the result. They are not score penalties and not deal-breakers. `{ "continue": false }` sets the posting to `ruled_out`, stores `ruledOutReason`, and creates no evaluation and no tracked job.
+
 The score has:
 
 - `skillsScore` — overlap between baseline skills and the posting
-- `preferencesScore` — worksite, location, and mapped level against saved preferences, or `null` when no preferences are saved
-- `overallScore` — a provisional blend, 0.65 skills and 0.35 preferences, in `SCORE_WEIGHTS`. When preferences are missing, overall equals the skills score.
+- `preferencesScore` — worksite (other than the remote-only pause above) and mapped level against saved preferences, or `null` when no preferences are saved. Location is not a silent penalty.
+- `overallScore` — `blendOverall(skillsScore, preferencesScore, skillsWeight)`. When preferences are missing, overall equals the skills score. The server always derives overall this way, including when a model returns its own overall.
 
-The local heuristic is the default and is what `npm test` locks in. A configured provider must return the JSON shape in `prompts/evaluate-posting.md`. The server drops any strength that does not cite a real fact id, and it fills blank title, company, requisition id, location, worksite, and level from the deterministic parser so the tracking table still has columns.
+The local heuristic is the default and is what `npm test` locks in. A configured provider must return the JSON shape in `prompts/evaluate-posting.md`. The server drops any strength that does not cite a real fact id, drops deal-breakers that repeat an acknowledged location or worksite mismatch, and fills blank title, company, requisition id, location, worksite, and level from the deterministic parser so the tracking table still has columns.
 
-Deal-breakers in the heuristic:
+Deal-breakers that remain in the heuristic:
 
-- The posting's worksite does not intersect the saved work modes.
+- The posting's worksite does not intersect the saved work modes, except the remote-only pause above, which asks first.
 - The mapped Microsoft level is two or more levels outside the target range.
-
-Location outside the saved list is a penalty, not a deal-breaker. That is an open product choice.
 
 A missing or unknown provider key is an error. Keel does not silently fall back to the heuristic after the user asked for a model.
 
-The posting and evaluation are stored as `pending`. They do not appear on the tracked list until the user tracks them.
+A scored posting is stored as `pending`. It does not appear on the tracked list until the user tracks it. Ruled-out postings stay in the database with the reason and are left out of Tailor and the tracked list.
 
 ### 4. Tracking
 
@@ -115,9 +124,9 @@ If `DATABASE_URL` already starts with `postgres`, the current SQLite build throw
 | `Document` | Original file path, mime type, and extracted text. |
 | `BaselineFact` | One cited fact. `userId` plus optional `documentId`. |
 | `ClarificationQuestion` | An open disagreement or a gap the extractor would not guess. `relatedFactIds` is a JSON array. |
-| `Preference` | One row per user. |
-| `JobPosting` | Raw text plus the columns the tracker needs. `pending` or `tracked`. |
-| `Evaluation` | Scores, cited strengths, gaps, deal-breakers, provider, warnings. |
+| `Preference` | One row per user, including `skillsWeight` (default 65). |
+| `JobPosting` | Raw text plus the columns the tracker needs. `pending`, `awaiting_preference`, `tracked`, or `ruled_out`. |
+| `Evaluation` | Scores, cited strengths, gaps, deal-breakers, acknowledged mismatches, provider, warnings. |
 | `TrackedJob` | The decision to keep a posting. |
 | `TailorOutput` | A stored letter and the resume edits that produced it. |
 
@@ -134,9 +143,10 @@ Skipping a job deletes the `JobPosting`. Evaluations, tailor output, and the tra
 | PATCH, DELETE | `/api/baseline/:id` | Edit (marks the fact confirmed) or delete. |
 | GET | `/api/clarifications` | List questions. |
 | PATCH | `/api/clarifications/:id` | Store an answer. Does not rewrite facts yet. |
-| GET, PUT | `/api/preferences` | Read or replace preferences. |
+| GET, PUT | `/api/preferences` | Read or replace preferences. Saving recomputes stored overall scores. |
 | GET | `/api/level-map` | The JSON file, including the disclaimer. |
-| POST | `/api/evaluate` | Score pasted text or a URL. |
+| POST | `/api/evaluate` | Score pasted text or a URL, or pause with `needs_decision`. |
+| POST | `/api/postings/:id/preference-decision` | `{ "continue": true }` scores a paused posting. `false` rules it out. |
 | POST | `/api/evaluations/:id/decision` | `{ "track": true \| false }`. |
 | GET | `/api/jobs` | Tracked jobs, sorted. |
 | DELETE | `/api/jobs/:id` | Remove a tracked job and its posting. |
@@ -148,7 +158,7 @@ Skipping a job deletes the `JobPosting`. Evaluations, tailor output, and the tra
 - Applying a clarification answer to the facts.
 - Page numbers inside PDFs. The excerpt is checked against extracted text, not a page coordinate.
 - Commute distance. The minutes are saved only.
-- The local skills score is phrase overlap, not a judgment of seniority or scope. The weights are provisional.
+- The local skills score is phrase overlap, not a judgment of seniority or scope. The default weight is 65/35, and the user can change it.
 - Model output is constrained by the prompt and by the citation filter. It is not a proof that every adjective in a letter is earned.
 - URL fetch does not do a DNS-rebinding check.
 
@@ -157,8 +167,5 @@ Skipping a job deletes the `JobPosting`. Evaluations, tailor output, and the tra
 - Is the working name Keel the one to keep?
 - Should L65 keep the IC5 nickname, and what nicknames belong on 63, 64, and 66?
 - Which level-map rows are actually trusted, and what source should replace the example rows?
-- Is a location outside the saved list a deal-breaker, or only a penalty?
-- Should hybrid count as acceptable when the user asked only for remote?
 - When a date conflict is answered, which fact is edited, and is the rejected one deleted?
-- Is the 0.65 / 0.35 blend the right default, and should the user be able to change it?
 - Before a paid hosted launch, stay on AGPL, dual-license, or choose something else?

@@ -100,6 +100,8 @@ model Preference {
   /// Microsoft-equivalent levels, for example 63 and 65.
   targetLevelMin          Int      @default(63)
   targetLevelMax          Int      @default(65)
+  /// Percent of the overall score that comes from skills. The rest is preferences. Default 65.
+  skillsWeight            Int      @default(65)
   notes                   String?
   updatedAt               DateTime @updatedAt
 }
@@ -120,9 +122,13 @@ model JobPosting {
   levelRaw       String?
   microsoftLevel Int?
   levelLabel     String?
-  /// pending until the user tracks it. Skipping deletes the row.
-  status         String   @default("pending")
-  createdAt      DateTime @default(now())
+  /// pending | awaiting_preference | tracked | ruled_out.
+  /// Skipping a scored job deletes the row. Ruling one out keeps it with a reason and no score.
+  status            String  @default("pending")
+  ruledOutReason    String?
+  /// JSON array of location or worksite mismatches shown when status is awaiting_preference.
+  preferenceHoldJson String @default("[]")
+  createdAt         DateTime @default(now())
 
   evaluation    Evaluation?
   trackedJob    TrackedJob?
@@ -149,6 +155,8 @@ model Evaluation {
   provider         String
   model            String?
   warningsJson     String     @default("[]")
+  /// Location or worksite mismatches the user chose to continue past.
+  mismatchesJson   String     @default("[]")
   createdAt        DateTime   @default(now())
   trackedJob       TrackedJob?
   tailorOutputs    TailorOutput[]

@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { getPrisma } from "@/lib/db";
 import { AppError } from "@/lib/errors";
-import { produceEvaluation } from "@/lib/evaluate";
+import { blendOverall, findPreferencePauses, parsePosting, produceEvaluation, ruledOutReason } from "@/lib/evaluate";
 import { conflictQuestion, proposeFacts, excerptIsInSource, type ProposedFact } from "@/lib/extract";
 import { assertUploadSize, textFromUpload } from "@/lib/files";
 import { asIso, asNumber, parseJson, parseStringArray } from "@/lib/json";
@@ -14,6 +14,7 @@ import type {
   DocumentView,
   FactView,
   PostingView,
+  PreferenceMismatch,
   PreferenceView,
   QuestionView,
   TrackedJobView,
@@ -373,6 +374,7 @@ function serializePreference(row: {
   commuteToleranceMinutes: number | bigint | null;
   targetLevelMin: number | bigint;
   targetLevelMax: number | bigint;
+  skillsWeight: number | bigint;
   notes: string | null;
 }): PreferenceView {
   const modes = parseStringArray(row.workModesJson).filter((mode): mode is WorkMode =>
@@ -384,6 +386,7 @@ function serializePreference(row: {
     commuteToleranceMinutes: asNumber(row.commuteToleranceMinutes),
     targetLevelMin: asNumber(row.targetLevelMin) ?? 63,
     targetLevelMax: asNumber(row.targetLevelMax) ?? 65,
+    skillsWeight: asNumber(row.skillsWeight) ?? 65,
     notes: row.notes,
   };
 }
@@ -394,7 +397,9 @@ export async function getPreferences(): Promise<PreferenceView | null> {
   return row ? serializePreference(row) : null;
 }
 
-export async function savePreferences(input: PreferenceInput): Promise<PreferenceView> {
+export async function savePreferences(
+  input: PreferenceInput,
+): Promise<{ preferences: PreferenceView; rescored: number }> {
   const user = await getLocalUser();
   const data = {
     locationsJson: JSON.stringify(input.locations),
@@ -402,6 +407,7 @@ export async function savePreferences(input: PreferenceInput): Promise<Preferenc
     commuteToleranceMinutes: input.commuteToleranceMinutes,
     targetLevelMin: input.targetLevelMin,
     targetLevelMax: input.targetLevelMax,
+    skillsWeight: input.skillsWeight,
     notes: input.notes ?? null,
   };
   const row = await getPrisma().preference.upsert({
@@ -409,7 +415,29 @@ export async function savePreferences(input: PreferenceInput): Promise<Preferenc
     create: { id: crypto.randomUUID(), userId: user.id, ...data },
     update: data,
   });
-  return serializePreference(row);
+  const preferences = serializePreference(row);
+  const rescored = await recomputeStoredScores(user.id, preferences.skillsWeight);
+  return { preferences, rescored };
+}
+
+async function recomputeStoredScores(userId: string, skillsWeight: number): Promise<number> {
+  const rows = await getPrisma().evaluation.findMany({ where: { userId } });
+  let updated = 0;
+  for (const row of rows) {
+    const overallScore = blendOverall(
+      asNumber(row.skillsScore) ?? 0,
+      asNumber(row.preferencesScore),
+      skillsWeight,
+    );
+    if (overallScore === asNumber(row.overallScore)) continue;
+    await getPrisma().evaluation.update({ where: { id: row.id }, data: { overallScore } });
+    updated += 1;
+  }
+  return updated;
+}
+
+function postingFields(text: string) {
+  return parsePosting(text, loadLevelMap());
 }
 
 export async function evaluateAndStore(input: {
@@ -418,6 +446,89 @@ export async function evaluateAndStore(input: {
   sourceUrl: string | null;
 }) {
   const user = await getLocalUser();
+  const preferences = await getPreferences();
+  const pauses = findPreferencePauses({ jobText: input.text, preferences });
+  const parsed = postingFields(input.text);
+  const postingId = crypto.randomUUID();
+  if (pauses.length > 0) {
+    await getPrisma().jobPosting.create({
+      data: {
+        id: postingId,
+        userId: user.id,
+        sourceType: input.sourceType,
+        sourceUrl: input.sourceUrl,
+        rawText: input.text.slice(0, 100_000),
+        title: parsed.title,
+        company: parsed.company,
+        requisitionId: parsed.requisitionId,
+        location: parsed.location,
+        worksite: parsed.worksite,
+        levelRaw: parsed.levelRaw,
+        microsoftLevel: parsed.microsoftLevel,
+        levelLabel: parsed.levelLabel,
+        status: "awaiting_preference",
+        preferenceHoldJson: JSON.stringify(pauses),
+      },
+    });
+    return {
+      status: "needs_decision" as const,
+      postingId,
+      mismatches: pauses,
+      title: parsed.title,
+      company: parsed.company,
+      requisitionId: parsed.requisitionId,
+      location: parsed.location,
+      worksite: parsed.worksite,
+    };
+  }
+  return scoreStoredPosting({
+    userId: user.id,
+    postingId,
+    text: input.text,
+    sourceType: input.sourceType,
+    sourceUrl: input.sourceUrl,
+    mismatches: [],
+  });
+}
+
+export async function resolvePreferenceHold(postingId: string, continueEvaluation: boolean) {
+  const user = await getLocalUser();
+  const posting = await getPrisma().jobPosting.findFirst({
+    where: { id: postingId, userId: user.id },
+  });
+  if (!posting) throw new AppError("Job posting not found.", 404);
+  if (posting.status !== "awaiting_preference") {
+    throw new AppError("This posting is not waiting on a location or worksite decision.", 409);
+  }
+  const mismatches = parseJson<PreferenceMismatch[]>(posting.preferenceHoldJson, []);
+  if (!continueEvaluation) {
+    const reason = ruledOutReason(mismatches);
+    await getPrisma().jobPosting.update({
+      where: { id: posting.id },
+      data: { status: "ruled_out", ruledOutReason: reason },
+    });
+    return { status: "ruled_out" as const, postingId: posting.id, reason, mismatches };
+  }
+  return scoreStoredPosting({
+    userId: user.id,
+    postingId: posting.id,
+    text: posting.rawText,
+    sourceType: posting.sourceType === "url" ? "url" : "paste",
+    sourceUrl: posting.sourceUrl,
+    mismatches,
+    existing: true,
+  });
+}
+
+async function scoreStoredPosting(input: {
+  userId: string;
+  postingId: string;
+  text: string;
+  sourceType: "paste" | "url";
+  sourceUrl: string | null;
+  mismatches: PreferenceMismatch[];
+  existing?: boolean;
+}) {
   const facts = await listFacts();
   const preferences = await getPreferences();
   const draft = await produceEvaluation({
@@ -425,44 +536,51 @@ export async function evaluateAndStore(input: {
     facts: facts.map(toCited),
     preferences,
     levelMap: loadLevelMap(),
+    acknowledgedMismatches: input.mismatches,
   });
-  const postingId = crypto.randomUUID();
   const evaluationId = crypto.randomUUID();
-  await getPrisma().jobPosting.create({
-    data: {
-      id: postingId,
-      userId: user.id,
-      sourceType: input.sourceType,
-      sourceUrl: input.sourceUrl,
-      rawText: input.text.slice(0, 100_000),
-      title: draft.title,
-      company: draft.company,
-      requisitionId: draft.requisitionId,
-      location: draft.location,
-      worksite: draft.worksite,
-      levelRaw: draft.levelRaw,
-      microsoftLevel: draft.microsoftLevel,
-      levelLabel: draft.levelLabel,
-      status: "pending",
-      evaluation: {
-        create: {
-          id: evaluationId,
-          userId: user.id,
-          overallScore: draft.overallScore,
-          skillsScore: draft.skillsScore,
-          preferencesScore: draft.preferencesScore,
-          strengthsJson: JSON.stringify(draft.strengths),
-          gapsJson: JSON.stringify(draft.gaps),
-          dealBreakersJson: JSON.stringify(draft.dealBreakers),
-          summary: draft.summary,
-          provider: draft.provider,
-          model: draft.model,
-          warningsJson: JSON.stringify(draft.warnings),
-        },
+  const evaluationData = {
+    id: evaluationId,
+    userId: input.userId,
+    overallScore: draft.overallScore,
+    skillsScore: draft.skillsScore,
+    preferencesScore: draft.preferencesScore,
+    strengthsJson: JSON.stringify(draft.strengths),
+    gapsJson: JSON.stringify(draft.gaps),
+    dealBreakersJson: JSON.stringify(draft.dealBreakers),
+    summary: draft.summary,
+    provider: draft.provider,
+    model: draft.model,
+    warningsJson: JSON.stringify(draft.warnings),
+    mismatchesJson: JSON.stringify(draft.mismatches),
+  };
+  if (input.existing) {
+    await getPrisma().jobPosting.update({
+      where: { id: input.postingId },
+      data: { status: "pending", evaluation: { create: evaluationData } },
+    });
+  } else {
+    await getPrisma().jobPosting.create({
+      data: {
+        id: input.postingId,
+        userId: input.userId,
+        sourceType: input.sourceType,
+        sourceUrl: input.sourceUrl,
+        rawText: input.text.slice(0, 100_000),
+        title: draft.title,
+        company: draft.company,
+        requisitionId: draft.requisitionId,
+        location: draft.location,
+        worksite: draft.worksite,
+        levelRaw: draft.levelRaw,
+        microsoftLevel: draft.microsoftLevel,
+        levelLabel: draft.levelLabel,
+        status: "pending",
+        evaluation: { create: evaluationData },
       },
-    },
-  });
-  return { postingId, evaluationId, status: "pending" as const, ...draft };
+    });
+  }
+  return { postingId: input.postingId, evaluationId, status: "pending" as const, ...draft };
 }
 
 export async function decideEvaluation(evaluationId: string, track: boolean) {
@@ -508,19 +626,23 @@ function trackedValue(row: TrackedJobView, key: SortKey): string | number | null
 
 export async function listTrackedJobs(sort: SortKey = "score", direction: "asc" | "desc" = "desc") {
   const user = await getLocalUser();
+  const preferences = await getPreferences();
+  const skillsWeight = preferences?.skillsWeight ?? 65;
   const rows = await getPrisma().trackedJob.findMany({
     where: { userId: user.id },
     include: { jobPosting: true, evaluation: true },
   });
   const views: TrackedJobView[] = rows.map((row) => {
     const level = row.jobPosting.levelLabel || row.jobPosting.levelRaw;
+    const skillsScore = asNumber(row.evaluation.skillsScore) ?? 0;
+    const preferencesScore = asNumber(row.evaluation.preferencesScore);
     return {
       id: row.id,
       jobPostingId: row.jobPostingId,
       evaluationId: row.evaluationId,
-      score: asNumber(row.evaluation.overallScore) ?? 0,
-      skillsScore: asNumber(row.evaluation.skillsScore) ?? 0,
-      preferencesScore: asNumber(row.evaluation.preferencesScore),
+      score: blendOverall(skillsScore, preferencesScore, skillsWeight),
+      skillsScore,
+      preferencesScore,
       title: row.jobPosting.title,
       requisitionId: row.jobPosting.requisitionId,
       company: row.jobPosting.company,
@@ -534,6 +656,7 @@ export async function listTrackedJobs(sort: SortKey = "score", direction: "asc" 
       gaps: parseJson(row.evaluation.gapsJson, []),
       dealBreakers: parseJson(row.evaluation.dealBreakersJson, []),
       warnings: parseJson(row.evaluation.warningsJson, []),
+      mismatches: parseJson(row.evaluation.mismatchesJson, []),
       provider: row.evaluation.provider,
       createdAt: asIso(row.createdAt),
     };
@@ -561,7 +684,7 @@ export async function deleteTrackedJob(id: string) {
 export async function listPostings(): Promise<PostingView[]> {
   const user = await getLocalUser();
   const rows = await getPrisma().jobPosting.findMany({
-    where: { userId: user.id },
+    where: { userId: user.id, status: { in: ["pending", "tracked"] } },
     include: { evaluation: true },
     orderBy: { createdAt: "desc" },
     take: 30,

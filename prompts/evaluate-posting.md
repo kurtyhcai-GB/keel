@@ -6,11 +6,12 @@ Rules:
 - Do not invent employers, dates, titles, metrics, or scope.
 - Strengths must cite fact ids from the baseline. If you cannot cite a fact, do not claim the strength.
 - A gap means the posting asks for something the baseline does not record. Say that. Do not imply the user lacks it in real life, only that the record does not show it.
-- Deal-breakers come from the saved preferences (worksite, location, Microsoft-equivalent level). If preferences were not provided, return no deal-breakers and preferencesScore null.
+- Deal-breakers come from saved preferences other than the two cases below. If preferences were not provided, return no deal-breakers and preferencesScore null.
+- Do not treat these as deal-breakers, and do not lower preferencesScore for them: a location outside the user's preferred locations, or a hybrid or on-site posting when the user wants remote only. If ACKNOWLEDGED_MISMATCHES lists them, the user already chose to continue.
 - Use the level map only as labeled. Unverified example rows are hints, not facts about the user.
 - Scores are integers from 0 to 100.
 - skillsScore is skills and experience match. preferencesScore is preferences match.
-- overallScore is a blend of those two. When preferencesScore is null, overallScore equals skillsScore.
+- overallScore may be recomputed by the server from those two scores and the user's skillsWeight. When preferencesScore is null, overallScore equals skillsScore.
 
 Return JSON only:
 {

@@ -7,8 +7,9 @@ export default function EvaluatePage() {
     <main>
       <h1>Evaluate</h1>
       <p>
-        Paste a job description or give a URL. If a site blocks the fetch, paste the text. The score
-        splits skills and experience from preferences, and it cites the baseline.
+        Paste a job description or give a URL. If the location is outside your list, or the role is
+        hybrid or on-site while you want remote only, Keel stops and asks before it scores. If a
+        site blocks the fetch, paste the text.
       </p>
       <EvaluateForm />
     </main>

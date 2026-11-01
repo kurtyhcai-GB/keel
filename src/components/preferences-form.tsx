@@ -22,6 +22,8 @@ export function PreferencesForm() {
   const [minLevel, setMinLevel] = useState("63");
   const [maxLevel, setMaxLevel] = useState("65");
   const [notes, setNotes] = useState("");
+  const [skillsWeight, setSkillsWeight] = useState(65);
+  const [rescored, setRescored] = useState<number | null>(null);
   const [entries, setEntries] = useState<LevelEntry[]>([]);
   const [disclaimer, setDisclaimer] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -45,6 +47,7 @@ export function PreferencesForm() {
           setMinLevel(String(prefs.preferences.targetLevelMin));
           setMaxLevel(String(prefs.preferences.targetLevelMax));
           setNotes(prefs.preferences.notes ?? "");
+          setSkillsWeight(prefs.preferences.skillsWeight);
         }
         setDisclaimer(map.disclaimer);
         setEntries(map.entries);
@@ -57,8 +60,9 @@ export function PreferencesForm() {
     event.preventDefault();
     setError(null);
     setSaved(false);
+    setRescored(null);
     try {
-      await api("/api/preferences", {
+      const saved = await api<{ preferences: PreferenceView; rescored: number }>("/api/preferences", {
         method: "PUT",
         body: JSON.stringify({
           locations: locations
@@ -69,9 +73,11 @@ export function PreferencesForm() {
           commuteToleranceMinutes: commute.trim() === "" ? null : Number(commute),
           targetLevelMin: Number(minLevel),
           targetLevelMax: Number(maxLevel),
+          skillsWeight,
           notes: notes.trim() || null,
         }),
       });
+      setRescored(saved.rescored);
       setSaved(true);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not save");
@@ -83,7 +89,14 @@ export function PreferencesForm() {
   return (
     <div className="stack">
       {error ? <p role="alert">{error}</p> : null}
-      {saved ? <p>Saved.</p> : null}
+      {saved ? (
+        <p>
+          Saved.
+          {rescored == null
+            ? ""
+            : ` Recalculated overall fit for ${rescored} evaluation${rescored === 1 ? "" : "s"} without calling a model. Tracked jobs use the new order.`}
+        </p>
+      ) : null}
       <form onSubmit={onSubmit}>
         <label>
           Locations, one per line
@@ -118,6 +131,18 @@ export function PreferencesForm() {
           Microsoft level maximum
           <input value={maxLevel} onChange={(event) => setMaxLevel(event.target.value)} inputMode="numeric" />
         </label>
+        <label>
+          Score weight: skills {skillsWeight}% · preferences {100 - skillsWeight}%
+          <input
+            type="range"
+            min={0}
+            max={100}
+            step={1}
+            value={skillsWeight}
+            onChange={(event) => setSkillsWeight(Number(event.target.value))}
+          />
+        </label>
+        <p>The default is 65% skills and 35% preferences. Saving recalculates overall fit from the scores you already have.</p>
         <label>
           Notes
           <textarea value={notes} onChange={(event) => setNotes(event.target.value)} />
