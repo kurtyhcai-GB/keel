@@ -69,7 +69,7 @@ Copy `.env.example` to `.env` when you need to change a setting. Real keys stay 
 | `AI_PROVIDER` | `local` (default), `mock`, `openai`, `anthropic`, `google`, or `openai-compatible` |
 | `OPENAI_API_KEY`, `OPENAI_MODEL` | OpenAI. Default model `gpt-4o-mini`. |
 | `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` | Anthropic. Default model `claude-sonnet-4-5`. Set the model to one your account can call. |
-| `GOOGLE_API_KEY`, `GOOGLE_MODEL` | Google AI. Default model `gemini-2.5-flash`. |
+| `GOOGLE_API_KEY`, `GOOGLE_MODEL` | Google AI. Default model `gemini-3.7-flash`. |
 | `OPENAI_COMPATIBLE_BASE_URL`, `OPENAI_COMPATIBLE_API_KEY`, `OPENAI_COMPATIBLE_MODEL` | Any OpenAI-compatible server, including a local one such as `http://127.0.0.1:11434/v1`. The key may be empty. |
 | `DATABASE_URL` | Default `file:./data/keel.sqlite`. See [Postgres](docs/design.md#postgres) before pointing this at Postgres. |
 | `LOCAL_USER_ID`, `LOCAL_USER_NAME` | The single local user. Default id `local`. |

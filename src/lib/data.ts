@@ -1,10 +1,19 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { getPrisma } from "@/lib/db";
 import { AppError } from "@/lib/errors";
 import { findPreferencePauses, parsePosting, produceEvaluation, ruledOutReason, scoreLocally } from "@/lib/evaluate";
 import { overallFit } from "@/lib/fit";
-import { conflictQuestion, proposeFacts, excerptIsInSource, type ProposedFact } from "@/lib/extract";
+import {
+  conflictQuestion,
+  factsMatchByIdentity,
+  isAutoExtractionQuestion,
+  proposeFacts,
+  excerptIsInSource,
+  sanitizeExtractionWarning,
+  type ProposedFact,
+} from "@/lib/extract";
 import { assertUploadSize, textFromUpload } from "@/lib/files";
 import { asIso, asNumber, parseJson, parseStringArray } from "@/lib/json";
 import { loadLevelMap } from "@/lib/level-map";
@@ -32,6 +41,61 @@ type PreferenceInput = z.infer<typeof preferenceInput>;
 type QuestionPatch = z.infer<typeof questionPatch>;
 
 const WORK_MODES = new Set<WorkMode>(["remote", "hybrid", "onsite"]);
+
+function serializeDocument(row: {
+  id: string;
+  filename: string;
+  mimeType: string;
+  byteSize: number;
+  createdAt: Date | string;
+  textContent: string;
+}): DocumentView {
+  return {
+    id: row.id,
+    filename: row.filename,
+    mimeType: row.mimeType,
+    byteSize: asNumber(row.byteSize) ?? 0,
+    createdAt: asIso(row.createdAt),
+    textPreview: row.textContent.slice(0, 400),
+  };
+}
+
+function hashFileContent(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+async function clearStaleExtractionQuestions(userId: string) {
+  const open = await getPrisma().clarificationQuestion.findMany({
+    where: { userId, status: "open" },
+  });
+  const stale = open.filter((row) => isAutoExtractionQuestion(row.question));
+  if (stale.length === 0) return;
+  await getPrisma().clarificationQuestion.updateMany({
+    where: { id: { in: stale.map((row) => row.id) } },
+    data: { status: "dismissed" },
+  });
+}
+
+export type UploadDuplicateResult = {
+  duplicate: true;
+  existingDocument: DocumentView;
+  filename: string;
+};
+
+export type UploadStoredResult = {
+  duplicate?: false;
+  document: DocumentView;
+  facts: FactView[];
+  questionIds: string[];
+  warnings: string[];
+};
+
+export type SaveUploadResult = UploadDuplicateResult | UploadStoredResult;
+
+export type SaveUploadOptions = {
+  duplicateAction?: "replace" | "keep_both";
+  replaceDocumentId?: string;
+};
 
 export async function getLocalUser() {
   const id = process.env.LOCAL_USER_ID || "local";
@@ -102,14 +166,7 @@ export async function listDocuments(): Promise<DocumentView[]> {
     where: { userId: user.id },
     orderBy: { createdAt: "desc" },
   });
-  return rows.map((row) => ({
-    id: row.id,
-    filename: row.filename,
-    mimeType: row.mimeType,
-    byteSize: asNumber(row.byteSize) ?? 0,
-    createdAt: asIso(row.createdAt),
-    textPreview: row.textContent.slice(0, 400),
-  }));
+  return rows.map((row) => serializeDocument(row));
 }
 
 export async function listFacts(): Promise<FactView[]> {
@@ -289,24 +346,41 @@ async function storeProposed(
   documentId: string,
   proposed: Awaited<ReturnType<typeof proposeFacts>>,
 ) {
+  const existingFacts = await listFacts();
   const facts = [];
   const conflictIds: string[] = [];
-  const warnings = [...proposed.warnings];
+  const warnings = proposed.warnings.map(sanitizeExtractionWarning);
   for (const fact of proposed.facts) {
+    const identity = {
+      title: fact.title ?? null,
+      company: fact.company ?? null,
+      startDate: fact.startDate ?? null,
+      endDate: fact.endDate ?? null,
+    };
+    if (existingFacts.some((row) => factsMatchByIdentity(row, identity))) {
+      continue;
+    }
     try {
       const saved = await createFact(
         { ...fact, summary: fact.summary || fact.sourceExcerpt.slice(0, 280) },
         { status: "draft", requireGroundedExcerpt: true, documentId },
       );
       facts.push(saved.fact);
+      existingFacts.push(saved.fact);
       conflictIds.push(...saved.conflicts);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Could not save a fact";
-      warnings.push(message);
+      warnings.push(sanitizeExtractionWarning(message));
     }
+  }
+  if (proposed.facts.length > 0) {
+    await clearStaleExtractionQuestions(userId);
   }
   const questions = [];
   for (const question of proposed.questions) {
+    if (proposed.facts.length > 0 && isAutoExtractionQuestion(question.question)) {
+      continue;
+    }
     const row = await getPrisma().clarificationQuestion.create({
       data: {
         id: crypto.randomUUID(),
@@ -322,7 +396,58 @@ async function storeProposed(
   return { facts, questionIds: [...questions, ...conflictIds], warnings };
 }
 
-export async function saveUpload(file: File) {
+async function persistUploadBytes(
+  userId: string,
+  file: File,
+  bytes: Uint8Array,
+  text: string,
+  contentHash: string,
+  existingId?: string,
+) {
+  const safeName = file.name.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 80) || "upload";
+  const directory = path.join(process.cwd(), "data", "uploads");
+  await mkdir(directory, { recursive: true });
+  const id = existingId ?? crypto.randomUUID();
+  const storagePath = path.join(directory, `${id}-${safeName}`);
+  await writeFile(storagePath, bytes);
+  if (existingId) {
+    const current = await getPrisma().document.findFirstOrThrow({
+      where: { id: existingId, userId },
+    });
+    if (current.storagePath !== storagePath) {
+      await unlink(current.storagePath).catch(() => undefined);
+    }
+    await getPrisma().baselineFact.deleteMany({
+      where: { userId, documentId: existingId, status: "draft" },
+    });
+    const document = await getPrisma().document.update({
+      where: { id: existingId },
+      data: {
+        filename: file.name,
+        mimeType: file.type || "application/octet-stream",
+        byteSize: bytes.byteLength,
+        storagePath,
+        textContent: text,
+        contentHash,
+      },
+    });
+    return document;
+  }
+  return getPrisma().document.create({
+    data: {
+      id,
+      userId,
+      filename: file.name,
+      mimeType: file.type || "application/octet-stream",
+      byteSize: bytes.byteLength,
+      storagePath,
+      textContent: text,
+      contentHash,
+    },
+  });
+}
+
+export async function saveUpload(file: File, options: SaveUploadOptions = {}): Promise<SaveUploadResult> {
   assertUploadSize(file.size);
   const user = await getLocalUser();
   const bytes = new Uint8Array(await file.arrayBuffer());
@@ -330,35 +455,42 @@ export async function saveUpload(file: File) {
     0,
     500_000,
   );
-  const id = crypto.randomUUID();
-  const safeName = file.name.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 80) || "upload";
-  const directory = path.join(process.cwd(), "data", "uploads");
-  await mkdir(directory, { recursive: true });
-  const storagePath = path.join(directory, `${id}-${safeName}`);
-  await writeFile(storagePath, bytes);
-  const document = await getPrisma().document.create({
-    data: {
-      id,
-      userId: user.id,
-      filename: file.name,
-      mimeType: file.type || "application/octet-stream",
-      byteSize: bytes.byteLength,
-      storagePath,
-      textContent: text,
-    },
-  });
+  const contentHash = hashFileContent(bytes);
+
+  if (options.duplicateAction === "replace" && options.replaceDocumentId) {
+    const existing = await getPrisma().document.findFirst({
+      where: { id: options.replaceDocumentId, userId: user.id },
+    });
+    if (!existing) throw new AppError("That document was not found.", 404);
+    const document = await persistUploadBytes(user.id, file, bytes, text, contentHash, existing.id);
+    const extracted = await storeProposed(user.id, document.id, await proposeFacts(text));
+    return { document: serializeDocument(document), ...extracted };
+  }
+
+  if (options.duplicateAction !== "keep_both") {
+    const duplicate = await getPrisma().document.findFirst({
+      where: { userId: user.id, contentHash },
+    });
+    if (duplicate) {
+      return {
+        duplicate: true,
+        existingDocument: serializeDocument(duplicate),
+        filename: file.name,
+      };
+    }
+  }
+
+  const document = await persistUploadBytes(user.id, file, bytes, text, contentHash);
   const extracted = await storeProposed(user.id, document.id, await proposeFacts(text));
-  return {
-    document: {
-      id: document.id,
-      filename: document.filename,
-      mimeType: document.mimeType,
-      byteSize: asNumber(document.byteSize) ?? 0,
-      createdAt: asIso(document.createdAt),
-      textPreview: text.slice(0, 400),
-    },
-    ...extracted,
-  };
+  return { document: serializeDocument(document), ...extracted };
+}
+
+export async function deleteDocument(id: string) {
+  const user = await getLocalUser();
+  const document = await getPrisma().document.findFirst({ where: { id, userId: user.id } });
+  if (!document) throw new AppError("Document not found.", 404);
+  await unlink(document.storagePath).catch(() => undefined);
+  await getPrisma().document.delete({ where: { id } });
 }
 
 export async function reextractDocument(id: string) {

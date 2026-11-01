@@ -54,7 +54,7 @@ export function resolveProvider(
     }
     return {
       mode: "ready",
-      provider: new GoogleProvider(env.GOOGLE_API_KEY, env.GOOGLE_MODEL || "gemini-2.5-flash"),
+      provider: new GoogleProvider(env.GOOGLE_API_KEY, env.GOOGLE_MODEL || "gemini-3.7-flash"),
     };
   }
   if (id === "openai-compatible") {
