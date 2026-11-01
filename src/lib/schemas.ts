@@ -58,6 +58,26 @@ export const preferenceDecisionInput = z.object({
   continue: z.boolean(),
 });
 
+export const skillsWeightInput = z.object({
+  skillsWeight: z.number().int().min(0).max(100),
+});
+
+export const demoInput = z.object({
+  action: z.enum(["load", "clear"]),
+});
+
+export const levelEditInput = z
+  .object({
+    id: z.string().min(1),
+    microsoftLevelMin: z.number().int().min(50).max(90),
+    microsoftLevelMax: z.number().int().min(50).max(90),
+    notes: z.string().max(4000),
+    confidence: z.enum(["high", "medium", "low"]),
+  })
+  .refine((value) => value.microsoftLevelMin <= value.microsoftLevelMax, {
+    message: "microsoftLevelMin must be less than or equal to microsoftLevelMax",
+  });
+
 export const tailorInput = z.object({
   jobPostingId: z.string().min(1),
 });

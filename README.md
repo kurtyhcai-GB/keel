@@ -31,7 +31,7 @@ npm install
 npm run dev
 ```
 
-Open <http://localhost:4317>. `npm install` generates the Prisma client. `npm run dev` creates the database and starts the app. You do not need a `.env` file until you want a model.
+Open <http://localhost:4317>. `npm install` generates the Prisma client. `npm run dev` creates the database and starts the app. You do not need a `.env` file until you want a model. The first screen is empty. Use **Load sample** in the sidebar for a labeled senior TPM example, then clear it before you add your own record.
 
 Try one evaluation:
 

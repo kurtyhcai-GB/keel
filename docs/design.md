@@ -49,16 +49,16 @@ If either is true, `POST /api/evaluate` does not score and does not call a model
 
 The score has:
 
-- `skillsScore` — overlap between baseline skills and the posting
-- `preferencesScore` — worksite (other than the remote-only pause above) and mapped level against saved preferences, or `null` when no preferences are saved. Location is not a silent penalty.
-- `overallScore` — `blendOverall(skillsScore, preferencesScore, skillsWeight)`. When preferences are missing, overall equals the skills score. The server always derives overall this way, including when a model returns its own overall.
+- `skillsScore` — overlap between baseline skills and the posting, or the model's skills score when a provider is configured. Preferences are not taken from the model.
+- `preferencesScore` — the average of the included parts: location, worksite, level, and commute. A location or remote-only worksite mismatch is left out of the average. A level one step outside the range scores 55 (a stretch). Two or more steps scores 20. Seattle, Redmond, Bellevue, and the nearby cities count as one metro. A saved location in that metro against a job there scores 100. A saved location elsewhere that matches scores 100, or 72 when it is a relocation away from the Seattle area.
+- `overallScore` — `round((skillsScore * skillsWeight + preferencesScore * (100 - skillsWeight)) / 100 - 6 * dealBreakerCount)`, clamped to 1–99. When preferences are missing, overall equals the skills score. The weight slider recomputes this from stored skills and preferences scores. Saving the rest of the form recomputes the preference parts from the stored posting text. Neither path calls a model.
 
 The local heuristic is the default and is what `npm test` locks in. A configured provider must return the JSON shape in `prompts/evaluate-posting.md`. The server drops any strength that does not cite a real fact id, drops deal-breakers that repeat an acknowledged location or worksite mismatch, and fills blank title, company, requisition id, location, worksite, and level from the deterministic parser so the tracking table still has columns.
 
-Deal-breakers that remain in the heuristic:
+Deal-breakers:
 
-- The posting's worksite does not intersect the saved work modes, except the remote-only pause above, which asks first.
-- The mapped Microsoft level is two or more levels outside the target range.
+- The mapped Microsoft-equivalent range is two or more levels outside the target range.
+- A Seattle-area hybrid or on-site role whose estimated or stated commute is over the saved tolerance. City drive times are labeled estimates unless the posting states a commute. A worksite you did not select scores 0 and is not, by itself, a deal-breaker. The remote-only case above pauses instead.
 
 A missing or unknown provider key is an error. Keel does not silently fall back to the heuristic after the user asked for a model.
 

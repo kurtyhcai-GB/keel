@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 
@@ -8,9 +8,13 @@ const entrySchema = z.object({
   companyLevel: z.string(),
   companyTitle: z.string().optional(),
   microsoftLevel: z.number().int(),
+  microsoftLevelMin: z.number().int(),
+  microsoftLevelMax: z.number().int(),
   displayLabel: z.string(),
   icNickname: z.string().nullable().optional(),
-  verification: z.enum(["anchor", "example-from-owner", "unverified-example"]),
+  confidence: z.enum(["high", "medium", "low"]),
+  verification: z.enum(["anchor", "reviewed", "unverified-example", "example-from-owner"]),
+  source: z.string(),
   notes: z.string(),
 });
 
@@ -26,12 +30,76 @@ export type LevelMap = z.infer<typeof mapSchema>;
 
 let cached: LevelMap | null = null;
 
+function overridesPath(): string {
+  return path.join(process.cwd(), "data", "level-map-overrides.json");
+}
+
+function readOverrides(): Record<string, Partial<LevelMapEntry>> {
+  try {
+    return JSON.parse(readFileSync(overridesPath(), "utf8")) as Record<string, Partial<LevelMapEntry>>;
+  } catch {
+    return {};
+  }
+}
+
 export function loadLevelMap(): LevelMap {
   if (cached) return cached;
   const file = path.join(process.cwd(), "data", "level-map.json");
-  const parsed = mapSchema.parse(JSON.parse(readFileSync(file, "utf8")));
-  cached = parsed;
-  return parsed;
+  const base = mapSchema.parse(JSON.parse(readFileSync(file, "utf8")));
+  const overrides = readOverrides();
+  const entries = base.entries.map((entry) => {
+    const patch = overrides[entry.id];
+    if (!patch) return entry;
+    const microsoftLevelMin = patch.microsoftLevelMin ?? entry.microsoftLevelMin;
+    const microsoftLevelMax = patch.microsoftLevelMax ?? entry.microsoftLevelMax;
+    const confidence = patch.confidence ?? entry.confidence;
+    const next = {
+      ...entry,
+      ...patch,
+      microsoftLevelMin,
+      microsoftLevelMax,
+      microsoftLevel:
+        microsoftLevelMin === microsoftLevelMax
+          ? microsoftLevelMin
+          : Math.round((microsoftLevelMin + microsoftLevelMax) / 2),
+      confidence,
+      displayLabel:
+        microsoftLevelMin === microsoftLevelMax
+          ? `Microsoft L${microsoftLevelMin}${entry.icNickname ? ` (${entry.icNickname})` : ""}`
+          : `Microsoft L${microsoftLevelMin}–${microsoftLevelMax}`,
+      verification:
+        confidence === "high" && entry.verification === "unverified-example" ? "reviewed" : entry.verification,
+    };
+    return entrySchema.parse(next);
+  });
+  cached = { ...base, entries };
+  return cached;
+}
+
+export function saveLevelMapOverride(input: {
+  id: string;
+  microsoftLevelMin: number;
+  microsoftLevelMax: number;
+  notes: string;
+  confidence: LevelMapEntry["confidence"];
+}): LevelMapEntry {
+  const current = loadLevelMap();
+  const entry = current.entries.find((item) => item.id === input.id);
+  if (!entry) {
+    throw new Error("Level row not found.");
+  }
+  const overrides = readOverrides();
+  overrides[input.id] = {
+    microsoftLevelMin: input.microsoftLevelMin,
+    microsoftLevelMax: input.microsoftLevelMax,
+    notes: input.notes,
+    confidence: input.confidence,
+  };
+  writeFileSync(overridesPath(), JSON.stringify(overrides, null, 2));
+  clearLevelMapCache();
+  const updated = loadLevelMap().entries.find((item) => item.id === input.id);
+  if (!updated) throw new Error("Level row not found.");
+  return updated;
 }
 
 export function clearLevelMapCache(): void {
@@ -41,7 +109,11 @@ export function clearLevelMapCache(): void {
 export type LevelMatch = {
   levelRaw: string | null;
   microsoftLevel: number | null;
+  microsoftLevelMin: number | null;
+  microsoftLevelMax: number | null;
   levelLabel: string | null;
+  confidence: LevelMapEntry["confidence"] | null;
+  entryId: string | null;
 };
 
 function escapeRegExp(value: string): string {
@@ -80,7 +152,11 @@ export function matchLevel(text: string, map: LevelMap): LevelMatch {
     return {
       levelRaw: generic?.[0]?.replace(/\s+/g, " ") ?? null,
       microsoftLevel: null,
+      microsoftLevelMin: null,
+      microsoftLevelMax: null,
       levelLabel: null,
+      confidence: null,
+      entryId: null,
     };
   }
 
@@ -92,6 +168,10 @@ export function matchLevel(text: string, map: LevelMap): LevelMatch {
   return {
     levelRaw: best.raw,
     microsoftLevel: best.entry.microsoftLevel,
+    microsoftLevelMin: best.entry.microsoftLevelMin,
+    microsoftLevelMax: best.entry.microsoftLevelMax,
     levelLabel: best.entry.displayLabel,
+    confidence: best.entry.confidence,
+    entryId: best.entry.id,
   };
 }

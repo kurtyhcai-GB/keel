@@ -40,6 +40,7 @@ yarn-error.log*
 /data/*.sqlite-wal
 /data/*.sqlite-shm
 /data/uploads/
+/data/level-map-overrides.json
 
 # generated Prisma client
 /src/generated/

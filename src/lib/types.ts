@@ -63,6 +63,15 @@ export type ScorePoint = {
   factIds: string[];
 };
 
+export type PreferencePartView = {
+  id: "location" | "worksite" | "level" | "commute";
+  label: string;
+  score: number;
+  detail: string;
+  included: boolean;
+  mismatch?: boolean;
+};
+
 export type EvaluationDraft = {
   title: string | null;
   company: string | null;
@@ -71,6 +80,8 @@ export type EvaluationDraft = {
   worksite: string | null;
   levelRaw: string | null;
   microsoftLevel: number | null;
+  microsoftLevelMin?: number | null;
+  microsoftLevelMax?: number | null;
   levelLabel: string | null;
   skillsScore: number;
   preferencesScore: number | null;
@@ -79,6 +90,7 @@ export type EvaluationDraft = {
   strengths: ScorePoint[];
   gaps: ScorePoint[];
   dealBreakers: ScorePoint[];
+  preferenceParts: PreferencePartView[];
   warnings: string[];
   mismatches: PreferenceMismatch[];
   provider: string;
@@ -104,6 +116,7 @@ export type TrackedJobView = {
   strengths: ScorePoint[];
   gaps: ScorePoint[];
   dealBreakers: ScorePoint[];
+  preferenceParts: PreferencePartView[];
   warnings: string[];
   mismatches: PreferenceMismatch[];
   provider: string;

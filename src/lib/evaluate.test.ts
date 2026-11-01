@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { blendOverall, findPreferencePauses, normalizeModelEvaluation, ruledOutReason, scoreLocally } from "@/lib/evaluate";
+import { overallFit } from "@/lib/fit";
+import { findPreferencePauses, normalizeModelEvaluation, ruledOutReason, scoreLocally } from "@/lib/evaluate";
 import type { CitedFact, PreferenceView } from "@/lib/types";
 
 const posting = readFileSync(path.join(process.cwd(), "examples", "sample-posting.txt"), "utf8");
@@ -43,7 +44,7 @@ describe("scoreLocally", () => {
     expect(result.strengths.some((item) => item.factIds.includes("f1"))).toBe(true);
     expect(result.gaps.some((item) => /Azure/i.test(item.text))).toBe(true);
     expect(result.dealBreakers).toEqual([]);
-    expect(result.mismatches).toEqual([]);
+    expect(result.mismatches.map((item) => item.kind)).toEqual(["worksite"]);
     expect(result.summary.toLowerCase()).not.toContain("worked at northwind");
     expect(result.provider).toBe("local");
   });
@@ -59,9 +60,8 @@ describe("scoreLocally", () => {
 describe("preference pauses", () => {
   it("asks before scoring a location or remote-only worksite mismatch", () => {
     const pauses = findPreferencePauses({ jobText: posting, preferences });
-    expect(pauses.map((pause) => pause.kind).sort()).toEqual(["location", "worksite"]);
-    expect(ruledOutReason(pauses)).toMatch(/remote only/);
-    expect(ruledOutReason(pauses)).toMatch(/outside your preferred locations/);
+    expect(pauses.map((pause) => pause.kind)).toEqual(["worksite"]);
+    expect(ruledOutReason(pauses)).toMatch(/remote is the only worksite/i);
   });
 
   it("does not pause when the posting fits the saved location and worksite", () => {
@@ -93,7 +93,8 @@ describe("preference pauses", () => {
     };
     expect(findPreferencePauses({ jobText, preferences: onsite })).toEqual([]);
     const result = scoreLocally({ jobText, facts: [fact], preferences: onsite });
-    expect(result.dealBreakers.some((item) => /remote/i.test(item.text))).toBe(true);
+    expect(result.dealBreakers.map((item) => item.text)).toEqual([]);
+    expect(result.preferenceParts.map((part) => [part.id, part.score])).toContainEqual(["worksite", 0]);
   });
 
   it("does not pause when no preferences are saved", () => {
@@ -101,13 +102,32 @@ describe("preference pauses", () => {
   });
 });
 
-describe("blendOverall", () => {
-  it("uses the saved skills weight and ignores a missing preferences score", () => {
-    expect(blendOverall(67, 100, 65)).toBe(79);
-    expect(blendOverall(80, 40, 50)).toBe(60);
-    expect(blendOverall(80, 40, 100)).toBe(80);
-    expect(blendOverall(80, 40, 0)).toBe(40);
-    expect(blendOverall(80, null, 10)).toBe(80);
+describe("overallFit", () => {
+  it("uses the saved skills weight, subtracts deal-breakers, and ignores a missing preferences score", () => {
+    expect(overallFit(67, 100, 65, 0)).toBe(79);
+    expect(overallFit(80, 40, 50, 0)).toBe(60);
+    expect(overallFit(80, 40, 50, 1)).toBe(54);
+    expect(overallFit(80, 40, 100, 0)).toBe(80);
+    expect(overallFit(80, 40, 0, 0)).toBe(40);
+    expect(overallFit(80, null, 10, 2)).toBe(80);
+    expect(overallFit(0, 0, 65, 0)).toBe(1);
+  });
+
+  it("treats a level two steps outside the range as a deal-breaker and a one-step gap as a stretch", () => {
+    const far = scoreLocally({
+      jobText: "Company: Microsoft\nLocation: Redmond, WA\nWorksite: Hybrid, 3 days in office\nLevel: L67\n\nRequirements:\n- technical program management\n",
+      facts: [fact],
+      preferences: { ...preferences, locations: ["Seattle"], workModes: ["hybrid"], commuteToleranceMinutes: 45 },
+    });
+    expect(far.dealBreakers.some((item) => /2 levels outside/i.test(item.text))).toBe(true);
+    expect(far.preferenceParts.find((part) => part.id === "level")?.score).toBe(20);
+    const stretch = scoreLocally({
+      jobText: "Company: Microsoft\nLocation: Redmond, WA\nWorksite: Remote\nLevel: L66\n\nRequirements:\n- technical program management\n",
+      facts: [fact],
+      preferences: { ...preferences, locations: ["Seattle"], workModes: ["remote"], commuteToleranceMinutes: 45 },
+    });
+    expect(stretch.dealBreakers).toEqual([]);
+    expect(stretch.preferenceParts.find((part) => part.id === "level")?.score).toBe(55);
   });
 });
 
@@ -164,10 +184,9 @@ describe("normalizeModelEvaluation", () => {
       local,
       { provider: "mock", model: "mock" },
     );
-    expect(normalized.overallScore).toBe(60);
-    expect(normalized.dealBreakers.map((item) => item.text)).toEqual([
-      "The level is far outside the target.",
-    ]);
+    expect(normalized.overallScore).toBe(90);
+    expect(normalized.preferencesScore).toBe(100);
+    expect(normalized.dealBreakers.some((item) => /remote enough/i.test(item.text))).toBe(false);
     expect(normalized.mismatches).toHaveLength(1);
   });
 });

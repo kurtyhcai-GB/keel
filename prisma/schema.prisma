@@ -157,6 +157,8 @@ model Evaluation {
   warningsJson     String     @default("[]")
   /// Location or worksite mismatches the user chose to continue past.
   mismatchesJson   String     @default("[]")
+  /// Preference breakdown (location, worksite, level, commute) used by the UI.
+  preferencePartsJson String  @default("[]")
   createdAt        DateTime   @default(now())
   trackedJob       TrackedJob?
   tailorOutputs    TailorOutput[]

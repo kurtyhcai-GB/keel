@@ -2,7 +2,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { getPrisma } from "@/lib/db";
 import { AppError } from "@/lib/errors";
-import { blendOverall, findPreferencePauses, parsePosting, produceEvaluation, ruledOutReason } from "@/lib/evaluate";
+import { findPreferencePauses, parsePosting, produceEvaluation, ruledOutReason, scoreLocally } from "@/lib/evaluate";
+import { overallFit } from "@/lib/fit";
 import { conflictQuestion, proposeFacts, excerptIsInSource, type ProposedFact } from "@/lib/extract";
 import { assertUploadSize, textFromUpload } from "@/lib/files";
 import { asIso, asNumber, parseJson, parseStringArray } from "@/lib/json";
@@ -15,8 +16,10 @@ import type {
   FactView,
   PostingView,
   PreferenceMismatch,
+  PreferencePartView,
   PreferenceView,
   QuestionView,
+  ScorePoint,
   TrackedJobView,
   WorkMode,
 } from "@/lib/types";
@@ -416,21 +419,75 @@ export async function savePreferences(
     update: data,
   });
   const preferences = serializePreference(row);
-  const rescored = await recomputeStoredScores(user.id, preferences.skillsWeight);
+  const rescored = await recomputeStoredScores(user.id, preferences.skillsWeight, true);
   return { preferences, rescored };
 }
 
-async function recomputeStoredScores(userId: string, skillsWeight: number): Promise<number> {
-  const rows = await getPrisma().evaluation.findMany({ where: { userId } });
+export async function updateSkillsWeight(skillsWeight: number): Promise<{ skillsWeight: number; rescored: number }> {
+  const user = await getLocalUser();
+  const existing = await getPreferences();
+  if (!existing) {
+    await savePreferences({
+      locations: [],
+      workModes: ["remote", "hybrid", "onsite"],
+      commuteToleranceMinutes: 45,
+      targetLevelMin: 63,
+      targetLevelMax: 65,
+      skillsWeight,
+      notes: null,
+    });
+    return { skillsWeight, rescored: 0 };
+  }
+  await getPrisma().preference.update({
+    where: { userId: user.id },
+    data: { skillsWeight },
+  });
+  const rescored = await recomputeStoredScores(user.id, skillsWeight, false);
+  return { skillsWeight, rescored };
+}
+
+async function recomputeStoredScores(
+  userId: string,
+  skillsWeight: number,
+  refreshParts: boolean,
+): Promise<number> {
+  const preferences = await getPreferences();
+  const rows = await getPrisma().evaluation.findMany({
+    where: { userId },
+    include: { jobPosting: true },
+  });
   let updated = 0;
   for (const row of rows) {
-    const overallScore = blendOverall(
-      asNumber(row.skillsScore) ?? 0,
-      asNumber(row.preferencesScore),
-      skillsWeight,
-    );
-    if (overallScore === asNumber(row.overallScore)) continue;
-    await getPrisma().evaluation.update({ where: { id: row.id }, data: { overallScore } });
+    const skillsScore = asNumber(row.skillsScore) ?? 0;
+    let preferencesScore = asNumber(row.preferencesScore);
+    let dealBreakers = parseJson<ScorePoint[]>(row.dealBreakersJson, []);
+    let preferenceParts = parseJson<PreferencePartView[]>(row.preferencePartsJson, []);
+    const mismatches = parseJson<PreferenceMismatch[]>(row.mismatchesJson, []);
+    if (refreshParts && preferences) {
+      const local = scoreLocally({
+        jobText: row.jobPosting.rawText,
+        facts: [],
+        preferences,
+        acknowledgedMismatches: mismatches,
+      });
+      preferencesScore = local.preferencesScore;
+      dealBreakers = local.dealBreakers;
+      preferenceParts = local.preferenceParts;
+    }
+    const overallScore = overallFit(skillsScore, preferencesScore, skillsWeight, dealBreakers.length);
+    const changed =
+      overallScore !== asNumber(row.overallScore) ||
+      preferencesScore !== asNumber(row.preferencesScore);
+    if (!changed && !refreshParts) continue;
+    await getPrisma().evaluation.update({
+      where: { id: row.id },
+      data: {
+        overallScore,
+        preferencesScore,
+        dealBreakersJson: JSON.stringify(dealBreakers),
+        preferencePartsJson: JSON.stringify(preferenceParts),
+      },
+    });
     updated += 1;
   }
   return updated;
@@ -553,6 +610,7 @@ async function scoreStoredPosting(input: {
     model: draft.model,
     warningsJson: JSON.stringify(draft.warnings),
     mismatchesJson: JSON.stringify(draft.mismatches),
+    preferencePartsJson: JSON.stringify(draft.preferenceParts),
   };
   if (input.existing) {
     await getPrisma().jobPosting.update({
@@ -640,7 +698,12 @@ export async function listTrackedJobs(sort: SortKey = "score", direction: "asc" 
       id: row.id,
       jobPostingId: row.jobPostingId,
       evaluationId: row.evaluationId,
-      score: blendOverall(skillsScore, preferencesScore, skillsWeight),
+      score: overallFit(
+        skillsScore,
+        preferencesScore,
+        skillsWeight,
+        parseJson<ScorePoint[]>(row.evaluation.dealBreakersJson, []).length,
+      ),
       skillsScore,
       preferencesScore,
       title: row.jobPosting.title,
@@ -655,6 +718,7 @@ export async function listTrackedJobs(sort: SortKey = "score", direction: "asc" 
       strengths: parseJson(row.evaluation.strengthsJson, []),
       gaps: parseJson(row.evaluation.gapsJson, []),
       dealBreakers: parseJson(row.evaluation.dealBreakersJson, []),
+      preferenceParts: parseJson(row.evaluation.preferencePartsJson, []),
       warnings: parseJson(row.evaluation.warningsJson, []),
       mismatches: parseJson(row.evaluation.mismatchesJson, []),
       provider: row.evaluation.provider,
