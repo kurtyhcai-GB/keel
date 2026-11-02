@@ -2,6 +2,7 @@ import { AppError } from "@/lib/errors";
 import {
   detectWorkModes,
   findLocationAndWorksiteMismatches,
+  locationsMatch,
   overallFit,
   ruledOutReason as joinReasons,
   scorePreferences,
@@ -86,7 +87,49 @@ export function parseWorksite(text: string): string | null {
   return null;
 }
 
-export function parsePosting(text: string, map: LevelMap) {
+function cityTokens(text: string): string[] {
+  const found: string[] = [];
+  const pattern = /\b([A-Z][a-zA-Z]+(?:[ .'-][A-Z][a-zA-Z]+){0,3},\s*[A-Z]{2})\b/g;
+  for (const match of text.matchAll(pattern)) {
+    found.push(match[1].replace(/\s+/g, " "));
+  }
+  if (/\bWashington,?\s+D\.?C\.?\b/i.test(text)) found.push("Washington, DC");
+  return found;
+}
+
+function uniqueCities(cities: string[]): string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const city of cities) {
+    const key = city.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(city);
+  }
+  return unique;
+}
+
+function proseCities(text: string): string[] {
+  const snippets: string[] = [];
+  const hub = text.match(/hub locations?\s*[-–:]\s*([^\n]+)/i);
+  if (hub?.[1]) snippets.push(hub[1]);
+  for (const match of text.matchAll(/\blocated\b[^\n.]{0,160}/gi)) {
+    snippets.push(match[0]);
+  }
+  return uniqueCities(snippets.flatMap(cityTokens));
+}
+
+function chooseLocation(text: string, preferences: PreferenceView | null | undefined): string | null {
+  const labeled = labeledLine(text, ["location", "city"]);
+  const labeledCities = labeled ? cityTokens(labeled) : [];
+  if (labeled && labeledCities.length <= 1) return labeled;
+  const pool = labeledCities.length > 1 ? labeledCities : proseCities(text);
+  if (pool.length === 0) return labeled;
+  const preferred = preferences?.locations ?? [];
+  return pool.find((city) => locationsMatch(city, preferred)) ?? pool[0] ?? labeled;
+}
+
+export function parsePosting(text: string, map: LevelMap, preferences?: PreferenceView | null) {
   const title =
     labeledLine(text, ["title", "role", "position"]) ??
     text
@@ -102,7 +145,7 @@ export function parsePosting(text: string, map: LevelMap) {
       text.match(
         /(?:requisition(?:\s*id)?|req(?:uisition)?\s*id|job\s*id|job\s*#)\s*[:#]?\s*([A-Za-z0-9][A-Za-z0-9-]{2,})/i,
       )?.[1] ?? null,
-    location: labeledLine(text, ["location", "city"]),
+    location: chooseLocation(text, preferences),
     worksite: parseWorksite(text),
     ...level,
   };
@@ -118,7 +161,7 @@ export function findPreferencePauses(input: {
   preferences: PreferenceView | null;
   levelMap?: LevelMap;
 }): PreferenceMismatch[] {
-  const parsed = parsePosting(input.jobText, input.levelMap ?? loadLevelMap());
+  const parsed = parsePosting(input.jobText, input.levelMap ?? loadLevelMap(), input.preferences);
   const modes = detectWorkModes(parsed.worksite, input.jobText);
   return findLocationAndWorksiteMismatches({
     location: parsed.location,
@@ -155,7 +198,7 @@ export function scoreLocally(input: {
   acknowledgedMismatches?: PreferenceMismatch[];
 }): EvaluationDraft {
   const map = input.levelMap ?? loadLevelMap();
-  const parsed = parsePosting(input.jobText, map);
+  const parsed = parsePosting(input.jobText, map, input.preferences);
   const warnings: string[] = [];
   const blob = baselineBlob(input.facts);
   const phrases = [
@@ -281,6 +324,51 @@ function keepKnown(points: ScorePoint[], ids: Set<string>, dropIfEmpty: boolean,
   return kept;
 }
 
+function mergedLevelBand(
+  merged: {
+    company: string | null;
+    levelRaw: string | null;
+    levelLabel: string | null;
+    microsoftLevel: number | null;
+    microsoftLevelMin: number | null;
+    microsoftLevelMax: number | null;
+  },
+  map: LevelMap,
+): { microsoftLevelMin: number | null; microsoftLevelMax: number | null; levelLabel: string | null } {
+  const probe = [merged.company, merged.levelRaw, merged.levelLabel].filter(Boolean).join("\n");
+  const matched = probe ? matchLevel(probe, map) : null;
+  const mapped =
+    matched && matched.microsoftLevelMin != null && matched.microsoftLevelMax != null ? matched : null;
+  const modelLevel = merged.microsoftLevel;
+  if (
+    mapped &&
+    (modelLevel == null || (modelLevel >= mapped.microsoftLevelMin! && modelLevel <= mapped.microsoftLevelMax!))
+  ) {
+    return {
+      microsoftLevelMin: mapped.microsoftLevelMin,
+      microsoftLevelMax: mapped.microsoftLevelMax,
+      levelLabel: merged.levelLabel ?? mapped.levelLabel,
+    };
+  }
+  if (modelLevel != null) {
+    return {
+      microsoftLevelMin: modelLevel,
+      microsoftLevelMax: modelLevel,
+      levelLabel: merged.levelLabel,
+    };
+  }
+  return {
+    microsoftLevelMin: merged.microsoftLevelMin,
+    microsoftLevelMax: merged.microsoftLevelMax,
+    levelLabel: merged.levelLabel,
+  };
+}
+
+function combineMismatches(prior: PreferenceMismatch[], detected: PreferenceMismatch[]): PreferenceMismatch[] {
+  const seen = new Set(prior.map((item) => item.kind));
+  return [...prior, ...detected.filter((item) => !seen.has(item.kind))];
+}
+
 export function normalizeModelEvaluation(
   raw: unknown,
   input: {
@@ -300,29 +388,69 @@ export function normalizeModelEvaluation(
   const ids = knownIds(input.facts);
   const strengths = keepKnown(parsed.data.strengths, ids, true, warnings);
   const gaps = keepKnown(parsed.data.gaps, ids, false, warnings);
-  const acknowledged = input.acknowledgedMismatches ?? [];
   const skillsScore = clampScore(parsed.data.skillsScore);
   if (!input.preferences && parsed.data.preferencesScore != null) {
     warnings.push("Preferences are not set. The model preferences score was discarded.");
   }
-  const preferencesScore = local.preferencesScore;
-  const dealBreakers = local.dealBreakers;
+  const value = parsed.data;
+  const location = value.location ?? local.location;
+  const worksite = value.worksite ?? local.worksite;
+  const levelRaw = value.levelRaw ?? local.levelRaw;
+  const microsoftLevel = value.microsoftLevel ?? local.microsoftLevel;
+  const company = value.company ?? local.company;
+  const band = mergedLevelBand(
+    {
+      company,
+      levelRaw,
+      levelLabel: value.levelLabel ?? local.levelLabel,
+      microsoftLevel,
+      microsoftLevelMin: local.microsoftLevelMin ?? null,
+      microsoftLevelMax: local.microsoftLevelMax ?? null,
+    },
+    loadLevelMap(),
+  );
+  const priorMismatches = input.acknowledgedMismatches ?? local.mismatches;
+  const modes = detectWorkModes(worksite, input.jobText);
+  const detected = input.preferences
+    ? findLocationAndWorksiteMismatches({ location, modes, preferences: input.preferences })
+    : [];
+  const mismatches = combineMismatches(priorMismatches, detected);
+  let preferencesScore = local.preferencesScore;
+  let dealBreakers = local.dealBreakers;
+  let preferenceParts = local.preferenceParts;
+  if (input.preferences) {
+    const preferenceScore = scorePreferences({
+      location,
+      modes,
+      jobText: input.jobText,
+      microsoftLevelMin: band.microsoftLevelMin,
+      microsoftLevelMax: band.microsoftLevelMax,
+      levelLabel: band.levelLabel,
+      preferences: input.preferences,
+      mismatches,
+    });
+    preferencesScore = preferenceScore.preferencesScore;
+    dealBreakers = preferenceScore.dealBreakers;
+    preferenceParts = preferenceScore.parts;
+    warnings.push(...preferenceScore.warnings);
+  }
   const overallScore = overallFit(
     skillsScore,
     preferencesScore,
     input.preferences?.skillsWeight ?? DEFAULT_SKILLS_WEIGHT,
     dealBreakers.length,
   );
-  const value = parsed.data;
   return {
     title: value.title ?? local.title,
-    company: value.company ?? local.company,
+    company,
     requisitionId: value.requisitionId ?? local.requisitionId,
-    location: value.location ?? local.location,
-    worksite: value.worksite ?? local.worksite,
-    levelRaw: value.levelRaw ?? local.levelRaw,
-    microsoftLevel: value.microsoftLevel ?? local.microsoftLevel,
-    levelLabel: value.levelLabel ?? local.levelLabel,
+    location,
+    worksite,
+    levelRaw,
+    microsoftLevel,
+    microsoftLevelMin: band.microsoftLevelMin,
+    microsoftLevelMax: band.microsoftLevelMax,
+    levelLabel: band.levelLabel,
     skillsScore,
     preferencesScore,
     overallScore,
@@ -330,9 +458,9 @@ export function normalizeModelEvaluation(
     strengths,
     gaps,
     dealBreakers,
-    preferenceParts: local.preferenceParts,
+    preferenceParts,
     warnings,
-    mismatches: acknowledged,
+    mismatches,
     provider: meta.provider,
     model: meta.model,
   };

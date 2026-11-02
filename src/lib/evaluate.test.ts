@@ -189,4 +189,84 @@ describe("normalizeModelEvaluation", () => {
     expect(normalized.dealBreakers.some((item) => /remote enough/i.test(item.text))).toBe(false);
     expect(normalized.mismatches).toHaveLength(1);
   });
+
+  it("rescores preferences from model location and level when the local parse missed both", () => {
+    const jobText = [
+      "Technical program management role. Pay band and office are in the header image.",
+      "",
+      "Requirements:",
+      "- technical program management",
+    ].join("\n");
+    const prefs: PreferenceView = {
+      locations: ["Redmond, WA"],
+      workModes: ["remote", "hybrid"],
+      commuteToleranceMinutes: 45,
+      targetLevelMin: 63,
+      targetLevelMax: 65,
+      skillsWeight: 65,
+      notes: null,
+    };
+    const local = scoreLocally({ jobText, facts: [fact], preferences: prefs });
+    expect(local.location).toBeNull();
+    expect(local.microsoftLevel).toBeNull();
+    expect(local.preferenceParts.find((part) => part.id === "level")?.detail).toMatch(/not scored/i);
+    expect(local.preferenceParts.find((part) => part.id === "location")?.detail).toMatch(/does not state a location/i);
+
+    const normalized = normalizeModelEvaluation(
+      {
+        title: "Technical Program Manager",
+        company: "Microsoft",
+        location: "Redmond, WA",
+        worksite: null,
+        levelRaw: "Technical Program Management IC4",
+        microsoftLevel: 63,
+        levelLabel: "Microsoft L63 (IC4)",
+        skillsScore: 80,
+        preferencesScore: 10,
+        overallScore: 10,
+        summary: "Model summary.",
+        strengths: [{ text: "Real citation.", factIds: ["f1"] }],
+        gaps: [],
+        dealBreakers: [],
+      },
+      { facts: [fact], preferences: prefs, jobText },
+      local,
+      { provider: "mock", model: "mock" },
+    );
+    const level = normalized.preferenceParts.find((part) => part.id === "level");
+    const location = normalized.preferenceParts.find((part) => part.id === "location");
+    expect(level).toMatchObject({ included: true, score: 100 });
+    expect(location?.detail).toContain("Redmond, WA");
+    expect(location?.score).toBe(100);
+    expect(normalized.preferencesScore).not.toBe(10);
+    expect(normalized.location).toBe("Redmond, WA");
+    expect(normalized.microsoftLevel).toBe(63);
+  });
+});
+
+describe("microsoft hub posting parse", () => {
+  it("maps IC4 beside Microsoft and prefers a saved hub city", () => {
+    const jobText = [
+      "Company: Microsoft",
+      "Technical Program Management IC4 - The typical base pay range for this role is competitive.",
+      "This role is located either in one or all hub locations - Atlanta, GA, Redmond, WA, Washington DC",
+      "",
+      "Requirements:",
+      "- technical program management",
+    ].join("\n");
+    const prefs: PreferenceView = {
+      ...preferences,
+      locations: ["Redmond, WA"],
+      workModes: ["remote", "hybrid"],
+    };
+    const result = scoreLocally({ jobText, facts: [fact], preferences: prefs });
+    expect(result.location).toBe("Redmond, WA");
+    expect(result.microsoftLevel).toBe(63);
+    expect(result.levelLabel).toBe("Microsoft L63 (IC4)");
+    expect(result.preferenceParts.find((part) => part.id === "level")).toMatchObject({
+      included: true,
+      score: 100,
+    });
+    expect(result.preferenceParts.find((part) => part.id === "location")?.detail).toContain("Redmond, WA");
+  });
 });

@@ -636,8 +636,8 @@ async function recomputeStoredScores(
   return updated;
 }
 
-function postingFields(text: string) {
-  return parsePosting(text, loadLevelMap());
+function postingFields(text: string, preferences?: PreferenceView | null) {
+  return parsePosting(text, loadLevelMap(), preferences);
 }
 
 export async function evaluateAndStore(input: {
@@ -648,7 +648,7 @@ export async function evaluateAndStore(input: {
   const user = await getLocalUser();
   const preferences = await getPreferences();
   const pauses = findPreferencePauses({ jobText: input.text, preferences });
-  const parsed = postingFields(input.text);
+  const parsed = postingFields(input.text, preferences);
   const postingId = crypto.randomUUID();
   if (pauses.length > 0) {
     await getPrisma().jobPosting.create({

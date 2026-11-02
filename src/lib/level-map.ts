@@ -403,6 +403,10 @@ export function matchLevel(text: string, map: LevelMap): LevelMatch {
     const patterns = /^\d+$/.test(token)
       ? [new RegExp(`\\bL\\s*${token}\\b`, "i"), new RegExp(`\\blevel\\s*${token}\\b`, "i")]
       : [new RegExp(`\\b${escapeRegExp(token)}\\b`, "i")];
+    const nickname = entry.icNickname?.trim();
+    if (nickname && nickname.toLowerCase() !== token.toLowerCase()) {
+      patterns.push(new RegExp(`\\b${escapeRegExp(nickname)}\\b`, "i"));
+    }
     for (const pattern of patterns) {
       const match = pattern.exec(text);
       if (!match || match.index === undefined) continue;
@@ -429,7 +433,9 @@ export function matchLevel(text: string, map: LevelMap): LevelMatch {
 
   candidates.sort((a, b) => {
     if (a.distance !== b.distance) return a.distance - b.distance;
-    return b.entry.companyLevel.length - a.entry.companyLevel.length;
+    const byLength = b.entry.companyLevel.length - a.entry.companyLevel.length;
+    if (byLength !== 0) return byLength;
+    return a.entry.microsoftLevel - b.entry.microsoftLevel;
   });
   const best = candidates[0]!;
   return {
