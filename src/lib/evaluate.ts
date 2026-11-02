@@ -42,41 +42,158 @@ const pointSchema = z.object({
   factIds: z.array(z.string()).default([]),
 });
 
+/** Optional text. A non-string becomes null so one bad field cannot fail the evaluation. */
+const looseString = z.preprocess((value) => {
+  if (value == null) return value;
+  if (typeof value === "string") return value;
+  return null;
+}, z.string().nullish()).catch(null);
+
+const looseInt = z.preprocess((value) => {
+  if (value == null || value === "") return null;
+  if (typeof value === "number" && Number.isInteger(value)) return value;
+  if (typeof value === "string" && /^-?\d+$/.test(value.trim())) return Number(value.trim());
+  return null;
+}, z.number().int().nullish()).catch(null);
+
+const looseOptionalScore = z.preprocess((value) => {
+  if (value == null || value === "") return null;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value))) return Number(value);
+  return null;
+}, z.number().nullish()).catch(null);
+
+function payToken(value: unknown): string | null {
+  if (value == null) return null;
+  if (typeof value !== "string") return null;
+  const text = value
+    .trim()
+    .toLowerCase()
+    .replace(/\./g, "")
+    .replace(/[_/]+/g, " ")
+    .replace(/\s+/g, " ");
+  return text || null;
+}
+
+/** year/yearly/annual/per year -> year; hour/hourly/per hour -> hour; anything else -> null. */
+function normalizePayPeriod(value: unknown): "year" | "hour" | null {
+  const text = payToken(value);
+  if (text == null) return null;
+  if (["year", "yearly", "annual", "annually", "per year", "a year"].includes(text)) return "year";
+  if (["hour", "hourly", "per hour", "an hour"].includes(text)) return "hour";
+  return null;
+}
+
+/** base/base pay/base salary -> base; total/total comp/TC -> total; anything else -> null. */
+function normalizePayKind(value: unknown): "base" | "total" | null {
+  const text = payToken(value);
+  if (text == null) return null;
+  if (["base", "base pay", "base salary"].includes(text)) return "base";
+  if (["total", "total comp", "total compensation", "tc"].includes(text)) return "total";
+  return null;
+}
+
+/** us/u.s./united states/national -> us; location/local/metro -> location; anything else -> other. */
+function normalizePayScope(value: unknown): "us" | "location" | "other" | null {
+  if (value == null || value === "") return null;
+  const text = payToken(value);
+  if (text == null) return "other";
+  if (["us", "usa", "united states", "national"].includes(text)) return "us";
+  if (["location", "local", "metro"].includes(text)) return "location";
+  return "other";
+}
+
+/**
+ * JSON numbers, or strings like "$119,800" and "120k". Unparseable values stay
+ * as-is so the number schema fails and `.catch(null)` clears the field.
+ */
+function coerceMoney(value: unknown): unknown {
+  if (value == null || value === "") return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : value;
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const negative = trimmed.startsWith("-") || /^\(.*\)$/.test(trimmed);
+  let body = trimmed.replace(/[()]/g, "").replace(/[$£€,\s]/g, "").replace(/usd|cad|eur|gbp/gi, "");
+  let multiplier = 1;
+  const suffix = body.match(/[kKmM]$/);
+  if (suffix) {
+    multiplier = suffix[0].toLowerCase() === "k" ? 1000 : 1_000_000;
+    body = body.slice(0, -1);
+  }
+  if (!/^\d+(\.\d+)?$/.test(body)) return value;
+  const amount = Number(body) * multiplier;
+  if (!Number.isFinite(amount)) return value;
+  return negative ? -Math.abs(amount) : amount;
+}
+
+const looseMoney = z.preprocess(coerceMoney, z.number().nullish()).catch(null);
+const loosePayPeriod = z.preprocess(normalizePayPeriod, z.enum(["year", "hour"]).nullish()).catch(null);
+const loosePayKind = z.preprocess(normalizePayKind, z.enum(["base", "total"]).nullish()).catch(null);
+const loosePayScope = z.preprocess(normalizePayScope, z.enum(["us", "location", "other"]).nullish()).catch(null);
+
+const payRangeSchema = z.object({
+  min: looseMoney,
+  max: looseMoney,
+  currency: looseString,
+  period: loosePayPeriod,
+  kind: loosePayKind,
+  scope: loosePayScope,
+  label: looseString,
+});
+
+/** Keep ranges that have both ends. A bad entry is dropped; it does not fail the array. */
+const loosePayRanges = z.preprocess((value) => {
+  if (value == null) return null;
+  if (!Array.isArray(value)) return null;
+  const kept: Array<z.infer<typeof payRangeSchema>> = [];
+  for (const item of value) {
+    const parsed = payRangeSchema.safeParse(item);
+    if (!parsed.success || parsed.data.min == null || parsed.data.max == null) continue;
+    kept.push(parsed.data);
+  }
+  return kept;
+}, z.array(payRangeSchema).nullable()).catch(null);
+
+function loosePoints() {
+  return z.preprocess((value) => {
+    if (value == null) return [];
+    if (!Array.isArray(value)) return [];
+    const kept: Array<z.infer<typeof pointSchema>> = [];
+    for (const item of value) {
+      if (!item || typeof item !== "object") continue;
+      const record = item as { text?: unknown; factIds?: unknown };
+      const factIds = Array.isArray(record.factIds) ? record.factIds.filter((id): id is string => typeof id === "string") : [];
+      const parsed = pointSchema.safeParse({ text: record.text, factIds });
+      if (parsed.success) kept.push(parsed.data);
+    }
+    return kept;
+  }, z.array(pointSchema)).catch([]);
+}
+
 const modelSchema = z.object({
-  title: z.string().nullish(),
-  company: z.string().nullish(),
-  requisitionId: z.string().nullish(),
-  location: z.string().nullish(),
-  worksite: z.string().nullish(),
-  levelRaw: z.string().nullish(),
-  microsoftLevel: z.number().int().nullish(),
-  levelLabel: z.string().nullish(),
-  payMin: z.number().nullish(),
-  payMax: z.number().nullish(),
-  payCurrency: z.string().nullish(),
-  payPeriod: z.enum(["year", "hour"]).nullish(),
-  payRaw: z.string().nullish(),
-  payKind: z.enum(["base", "total"]).nullish(),
-  payRanges: z
-    .array(
-      z.object({
-        min: z.number(),
-        max: z.number(),
-        currency: z.string().nullish(),
-        period: z.enum(["year", "hour"]).nullish(),
-        kind: z.enum(["base", "total"]).nullish(),
-        scope: z.enum(["us", "location", "other"]).nullish(),
-        label: z.string().nullish(),
-      }),
-    )
-    .nullish(),
+  title: looseString,
+  company: looseString,
+  requisitionId: looseString,
+  location: looseString,
+  worksite: looseString,
+  levelRaw: looseString,
+  microsoftLevel: looseInt,
+  levelLabel: looseString,
+  payMin: looseMoney,
+  payMax: looseMoney,
+  payCurrency: looseString,
+  payPeriod: loosePayPeriod,
+  payRaw: looseString,
+  payKind: loosePayKind,
+  payRanges: loosePayRanges,
   skillsScore: z.number(),
-  preferencesScore: z.number().nullish(),
+  preferencesScore: looseOptionalScore,
   overallScore: z.number(),
   summary: z.string().min(1),
-  strengths: z.array(pointSchema).default([]),
-  gaps: z.array(pointSchema).default([]),
-  dealBreakers: z.array(pointSchema).default([]),
+  strengths: loosePoints(),
+  gaps: loosePoints(),
+  dealBreakers: loosePoints(),
 });
 
 function clampScore(value: number): number {
@@ -512,7 +629,12 @@ export function normalizeModelEvaluation(
 ): EvaluationDraft {
   const parsed = modelSchema.safeParse(raw);
   if (!parsed.success) {
-    throw new AppError("The model returned JSON that did not match the evaluation schema.", 502);
+    const fields = [
+      ...new Set(parsed.error.issues.map((issue) => (issue.path.length > 0 ? issue.path.join(".") : "(root)"))),
+    ];
+    const message = `The model returned JSON that did not match the evaluation schema (${fields.join(", ")}).`;
+    console.error(message);
+    throw new AppError(message, 502);
   }
   const warnings: string[] = [];
   const ids = knownIds(input.facts);
@@ -523,11 +645,17 @@ export function normalizeModelEvaluation(
     warnings.push("Preferences are not set. The model preferences score was discarded.");
   }
   const value = parsed.data;
+  const payRanges =
+    value.payRanges == null
+      ? null
+      : value.payRanges.flatMap((range) =>
+          range.min != null && range.max != null ? [{ ...range, min: range.min, max: range.max }] : [],
+        );
   const location = value.location ?? local.location;
   const worksite = value.worksite ?? local.worksite;
   const levelRaw = value.levelRaw ?? local.levelRaw;
   const company = value.company ?? local.company;
-  const pay = mergedPay(value, local);
+  const pay = mergedPay({ ...value, payRanges }, local);
   const band = mergedLevelBand(
     {
       company,

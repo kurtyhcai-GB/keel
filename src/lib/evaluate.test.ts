@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { overallFit } from "@/lib/fit";
 import { findPreferencePauses, normalizeModelEvaluation, ruledOutReason, scoreLocally } from "@/lib/evaluate";
 import type { CitedFact, PreferenceView } from "@/lib/types";
@@ -367,5 +367,96 @@ describe("pay and level mapping", () => {
     expect(normalized.levelFromPay).toBe(true);
     expect(normalized.preferenceParts.find((part) => part.id === "level")?.detail).toMatch(/came from posted pay/i);
     expect(normalized.preferencesScore).not.toBe(10);
+  });
+
+  it("accepts loose model pay values and falls back to the local parse when a value is dropped", () => {
+    const jobText = [
+      "Company: Contoso",
+      "Location: Redmond, WA",
+      "Worksite: Remote",
+      "The typical base pay range for this role across the U.S. is USD $119,800 - $234,700 per year.",
+      "",
+      "Requirements:",
+      "- technical program management",
+    ].join("\n");
+    const local = scoreLocally({ jobText, facts: [fact], preferences: payPrefs });
+    expect(local.payMin).toBe(119_800);
+    expect(local.payMax).toBe(234_700);
+    const normalized = normalizeModelEvaluation(
+      {
+        title: "Technical Program Manager",
+        company: "Contoso",
+        location: { city: "Redmond" },
+        worksite: "Remote",
+        levelRaw: null,
+        microsoftLevel: "65",
+        levelLabel: null,
+        payMin: "not posted as a number",
+        payMax: "n/a",
+        payCurrency: "USD",
+        payPeriod: "yearly",
+        payRaw: "The typical base pay range for this role across the U.S. is USD $119,800 - $234,700 per year.",
+        payKind: "Base",
+        payRanges: [
+          { min: "$119,800", max: "120k", currency: "USD", period: "annual", kind: "base salary", scope: "U.S.", label: "United States" },
+          { min: 100_000, scope: "metro" },
+          { min: 90_000, max: 110_000, scope: "EMEA", period: "per year", kind: "TC" },
+        ],
+        skillsScore: 80,
+        preferencesScore: "nope",
+        overallScore: 80,
+        summary: "Model summary.",
+        strengths: [{ text: "Real citation.", factIds: ["f1"] }, { text: "" }, "not a point"],
+        gaps: [],
+        dealBreakers: [],
+      },
+      { facts: [fact], preferences: payPrefs, jobText },
+      local,
+      { provider: "google", model: "gemini-3.8-flash" },
+    );
+    expect(normalized.payMin).toBe(119_800);
+    expect(normalized.payMax).toBe(234_700);
+    expect(normalized.payPeriod).toBe("year");
+    expect(normalized.payRanges).toEqual([
+      {
+        min: 119_800,
+        max: 120_000,
+        currency: "USD",
+        period: "year",
+        kind: "base",
+        scope: "us",
+        label: "United States",
+      },
+      {
+        min: 90_000,
+        max: 110_000,
+        currency: "USD",
+        period: "year",
+        kind: "total",
+        scope: "other",
+        label: "",
+      },
+    ]);
+    expect(normalized.location).toBe(local.location);
+    expect(normalized.microsoftLevel).toBe(65);
+    expect(normalized.strengths).toEqual([{ text: "Real citation.", factIds: ["f1"] }]);
+    expect(normalized.summary).toBe("Model summary.");
+  });
+
+  it("names the schema fields that still fail", () => {
+    const jobText = "Program manager role.";
+    const local = scoreLocally({ jobText, facts: [fact], preferences: payPrefs });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(() =>
+      normalizeModelEvaluation(
+        { skillsScore: "high", summary: "" },
+        { facts: [fact], preferences: payPrefs, jobText },
+        local,
+        { provider: "google", model: "gemini-3.8-flash" },
+      ),
+    ).toThrow(/skillsScore/);
+    expect(error).toHaveBeenCalledWith(expect.stringMatching(/skillsScore/));
+    expect(error.mock.calls.some((call) => JSON.stringify(call).includes("high"))).toBe(false);
+    error.mockRestore();
   });
 });
