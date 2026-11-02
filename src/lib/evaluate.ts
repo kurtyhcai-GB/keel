@@ -257,8 +257,17 @@ function proseCities(text: string): string[] {
   return uniqueCities(snippets.flatMap(cityTokens));
 }
 
+/** "Location United States - Remote  Employment Type …" or "Location: Redmond, WA". */
+function readLocationField(text: string): string | null {
+  const match = text.match(
+    /(?:^|\n)\s*location(?!\s+type\b)\s*:?\s+(.+?)(?=\s+(?:employment type|location type|job type|worksite|work site|workplace)\b|\n|$)/i,
+  );
+  const value = match?.[1]?.replace(/\s+/g, " ").trim();
+  return value || null;
+}
+
 function chooseLocation(text: string, preferences: PreferenceView | null | undefined): string | null {
-  const labeled = labeledLine(text, ["location", "city"]);
+  const labeled = readLocationField(text) ?? labeledLine(text, ["city"]);
   const labeledCities = labeled ? cityTokens(labeled) : [];
   if (labeled && labeledCities.length <= 1) return labeled;
   const pool = labeledCities.length > 1 ? labeledCities : proseCities(text);

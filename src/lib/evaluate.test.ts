@@ -443,6 +443,143 @@ describe("pay and level mapping", () => {
     expect(normalized.summary).toBe("Model summary.");
   });
 
+  it("treats a remote location with a hybrid location type as a remote match", () => {
+    const jobText = [
+      "Company: RobCo",
+      "Location United States - Remote  Employment Type Full time  Location Type Hybrid",
+      "",
+      "Our US headquarters is in Austin, TX, with a lab in the Bay Area.",
+      "",
+      "Requirements:",
+      "- technical program management",
+    ].join("\n");
+    const prefs: PreferenceView = {
+      locations: [
+        "Redmond, WA",
+        "Bellevue, WA",
+        "Kirkland, WA",
+        "Woodinville, WA",
+        "Sammamish, WA",
+        "Issaquah, WA",
+        "Seattle, WA",
+      ],
+      workModes: ["remote", "hybrid"],
+      commuteToleranceMinutes: 45,
+      targetLevelMin: 63,
+      targetLevelMax: 65,
+      skillsWeight: 65,
+      notes: null,
+    };
+    expect(findPreferencePauses({ jobText, preferences: prefs })).toEqual([]);
+    const result = scoreLocally({ jobText, facts: [fact], preferences: prefs });
+    expect(result.location).toBe("United States - Remote");
+    expect(result.worksite).toBe("Hybrid");
+    const location = result.preferenceParts.find((part) => part.id === "location");
+    expect(location).toMatchObject({
+      score: 100,
+      included: true,
+      mismatch: false,
+      detail: "Remote in the United States, and you accept remote roles.",
+    });
+    expect(result.preferenceParts.find((part) => part.id === "worksite")).toMatchObject({
+      score: 100,
+      included: true,
+    });
+    const commute = result.preferenceParts.find((part) => part.id === "commute");
+    expect(commute?.included).toBe(false);
+    expect(commute?.detail).toBe("Not applicable for a remote role.");
+    expect(result.warnings.some((warning) => /Seattle-area cities are estimates/i.test(warning))).toBe(false);
+    expect(result.warnings.some((warning) => /scored as relocation/i.test(warning))).toBe(false);
+    expect(result.preferenceParts.some((part) => /scored as relocation/i.test(part.detail))).toBe(false);
+    expect(result.warnings).toContain(
+      "The posting lists the location as remote but the location type as hybrid. Confirm with the recruiter where the hybrid office would be.",
+    );
+
+    const local = scoreLocally({
+      jobText: "Requirements:\n- technical program management\n",
+      facts: [fact],
+      preferences: prefs,
+    });
+    const normalized = normalizeModelEvaluation(
+      {
+        title: "Program Manager",
+        company: "RobCo",
+        location: "United States - Remote",
+        worksite: "Hybrid",
+        skillsScore: 80,
+        preferencesScore: 10,
+        overallScore: 10,
+        summary: "Model summary.",
+        strengths: [{ text: "Real citation.", factIds: ["f1"] }],
+        gaps: [],
+        dealBreakers: [],
+      },
+      { facts: [fact], preferences: prefs, jobText },
+      local,
+      { provider: "mock", model: "mock" },
+    );
+    expect(normalized.preferenceParts.find((part) => part.id === "location")).toMatchObject({
+      score: 100,
+      included: true,
+      mismatch: false,
+    });
+    expect(normalized.mismatches.map((item) => item.kind)).not.toContain("location");
+    expect(normalized.preferenceParts.find((part) => part.id === "commute")?.included).toBe(false);
+    expect(normalized.warnings.some((warning) => /Seattle-area cities are estimates/i.test(warning))).toBe(false);
+    expect(normalized.warnings).toContain(
+      "The posting lists the location as remote but the location type as hybrid. Confirm with the recruiter where the hybrid office would be.",
+    );
+  });
+
+  it("still treats a remote location as outside when remote is not accepted", () => {
+    const jobText = [
+      "Company: RobCo",
+      "Location: United States - Remote",
+      "Location Type: Hybrid",
+      "",
+      "Requirements:",
+      "- technical program management",
+    ].join("\n");
+    const onsite: PreferenceView = {
+      ...preferences,
+      locations: ["Seattle, WA"],
+      workModes: ["onsite", "hybrid"],
+    };
+    const pauses = findPreferencePauses({ jobText, preferences: onsite });
+    expect(pauses.map((pause) => pause.kind)).toEqual(["location"]);
+    expect(pauses[0]?.reason).toMatch(/outside the locations you saved/i);
+    const result = scoreLocally({ jobText, facts: [fact], preferences: onsite });
+    expect(result.preferenceParts.find((part) => part.id === "location")?.detail).toMatch(/outside the locations/i);
+    expect(result.preferenceParts.find((part) => part.id === "commute")?.detail).toBe(
+      "Not applicable for a remote role.",
+    );
+  });
+
+  it("still scores commute for a Seattle-area hybrid role", () => {
+    const jobText = [
+      "Company: Contoso",
+      "Location: Redmond, WA",
+      "Worksite: Hybrid, 3 days in office",
+      "",
+      "Requirements:",
+      "- technical program management",
+    ].join("\n");
+    const prefs: PreferenceView = {
+      ...preferences,
+      locations: ["Seattle, WA"],
+      workModes: ["hybrid", "remote"],
+      commuteToleranceMinutes: 45,
+    };
+    const result = scoreLocally({ jobText, facts: [fact], preferences: prefs });
+    const commute = result.preferenceParts.find((part) => part.id === "commute");
+    expect(commute).toMatchObject({ included: true, score: 100 });
+    expect(commute?.detail).toMatch(/28 min/);
+    expect(result.warnings).toContain(
+      "Commute times for Seattle-area cities are estimates unless the posting states a commute.",
+    );
+    expect(result.warnings.some((warning) => /location type as hybrid/i.test(warning))).toBe(false);
+  });
+
   it("names the schema fields that still fail", () => {
     const jobText = "Program manager role.";
     const local = scoreLocally({ jobText, facts: [fact], preferences: payPrefs });
