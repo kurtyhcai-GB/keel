@@ -43,6 +43,12 @@ export function inSeattleMetro(value: string | null | undefined): boolean {
   return SEATTLE_PLACES.some((place) => lower.includes(place));
 }
 
+/** Location field that names a remote arrangement rather than a city. */
+export function isRemoteLocation(value: string | null | undefined): boolean {
+  if (!value) return false;
+  return /\bremote\b|\bwork from home\b|\bwfh\b|\banywhere\b/i.test(value);
+}
+
 export function locationsMatch(jobLocation: string | null, preferred: string[]): boolean {
   if (!jobLocation || preferred.length === 0) return false;
   const job = jobLocation.toLowerCase();
@@ -74,6 +80,25 @@ export function primaryWorksite(modes: WorkMode[]): WorkMode | null {
   return null;
 }
 
+/**
+ * A remote location is remote evidence even when another field says hybrid or on-site.
+ * The conflict is reported separately; the score uses the remote reading.
+ */
+export function scoredWorksite(location: string | null, modes: WorkMode[]): WorkMode | null {
+  if (isRemoteLocation(location)) return "remote";
+  return primaryWorksite(modes);
+}
+
+export function remoteLocationConflict(
+  location: string | null,
+  modes: WorkMode[],
+): "hybrid" | "onsite" | null {
+  if (!isRemoteLocation(location)) return null;
+  if (modes.includes("hybrid")) return "hybrid";
+  if (modes.includes("onsite")) return "onsite";
+  return null;
+}
+
 export function findLocationAndWorksiteMismatches(input: {
   location: string | null;
   modes: WorkMode[];
@@ -81,9 +106,12 @@ export function findLocationAndWorksiteMismatches(input: {
 }): PreferenceMismatch[] {
   if (!input.preferences) return [];
   const mismatches: PreferenceMismatch[] = [];
+  const remotePlace = isRemoteLocation(input.location);
+  const acceptsRemote = input.preferences.workModes.includes("remote");
   if (
     input.preferences.locations.length > 0 &&
     input.location &&
+    !(remotePlace && acceptsRemote) &&
     !locationsMatch(input.location, input.preferences.locations)
   ) {
     mismatches.push({
@@ -93,7 +121,7 @@ export function findLocationAndWorksiteMismatches(input: {
   }
   const remoteOnly =
     input.preferences.workModes.length === 1 && input.preferences.workModes[0] === "remote";
-  const worksite = primaryWorksite(input.modes);
+  const worksite = scoredWorksite(input.location, input.modes);
   if (remoteOnly && worksite && worksite !== "remote") {
     mismatches.push({
       kind: "worksite",
@@ -143,10 +171,14 @@ export function scorePreferences(input: {
 }): { preferencesScore: number; parts: PreferencePart[]; dealBreakers: ScorePoint[]; warnings: string[] } {
   const locationMismatch = input.mismatches.some((item) => item.kind === "location");
   const worksiteMismatch = input.mismatches.some((item) => item.kind === "worksite");
-  const worksite = primaryWorksite(input.modes);
+  const worksite = scoredWorksite(input.location, input.modes);
+  const remotePlace = isRemoteLocation(input.location);
+  const acceptsRemote = input.preferences.workModes.includes("remote");
+  const remoteMatch = remotePlace && acceptsRemote && !locationMismatch;
   const locationHit =
-    !locationMismatch && locationsMatch(input.location, input.preferences.locations);
-  const awayFromSeattle = Boolean(input.location) && !inSeattleMetro(input.location);
+    remoteMatch ||
+    (!locationMismatch && locationsMatch(input.location, input.preferences.locations));
+  const awayFromSeattle = Boolean(input.location) && !inSeattleMetro(input.location) && !remotePlace;
 
   let locationScore = 0;
   let locationDetail = locationMismatch
@@ -157,7 +189,11 @@ export function scorePreferences(input: {
         ? `${input.location} is outside the locations you saved.`
         : "The posting does not state a location.";
   let locationIncluded = !locationMismatch && input.preferences.locations.length > 0 && Boolean(input.location);
-  if (locationHit && awayFromSeattle) {
+  if (remoteMatch) {
+    locationScore = 100;
+    locationDetail = "Remote in the United States, and you accept remote roles.";
+    locationIncluded = true;
+  } else if (locationHit && awayFromSeattle) {
     locationScore = 72;
     locationDetail = `${input.location} is a location you marked open. It is outside the Seattle area, so this is a relocation rather than a commute.`;
     locationIncluded = true;
@@ -229,16 +265,17 @@ export function scorePreferences(input: {
     },
   ];
 
-  const minutes = commuteMinutes(input.location, input.jobText);
+  const minutes = remotePlace || worksite === "remote" ? null : commuteMinutes(input.location, input.jobText);
   const commuteApplies =
-    locationHit && !awayFromSeattle && worksite !== "remote" && worksite !== null && minutes != null;
-  if (worksite === "remote") {
+    locationHit && !awayFromSeattle && worksite !== "remote" && !remotePlace && worksite !== null && minutes != null;
+  const explicitCommute = /commute[^.\n]{0,40}?(\d{1,3})\s*(?:minutes|minute|mins|min)\b/i.test(input.jobText);
+  if (remotePlace || worksite === "remote") {
     parts.push({
       id: "commute",
       label: "Commute",
-      score: 100,
-      detail: "Remote role. Commute tolerance is not applied.",
-      included: true,
+      score: 0,
+      detail: "Not applicable for a remote role.",
+      included: false,
     });
   } else if (commuteApplies && minutes != null) {
     const tolerance = input.preferences.commuteToleranceMinutes ?? 45;
@@ -293,9 +330,20 @@ export function scorePreferences(input: {
     });
   }
 
-  const warnings = [
-    "Commute times for Seattle-area cities are estimates unless the posting states a commute.",
-  ];
+  const warnings: string[] = [];
+  if (commuteApplies && minutes != null && !explicitCommute) {
+    warnings.push("Commute times for Seattle-area cities are estimates unless the posting states a commute.");
+  }
+  const conflict = remoteLocationConflict(input.location, input.modes);
+  if (conflict === "hybrid") {
+    warnings.push(
+      "The posting lists the location as remote but the location type as hybrid. Confirm with the recruiter where the hybrid office would be.",
+    );
+  } else if (conflict === "onsite") {
+    warnings.push(
+      "The posting lists the location as remote but the location type as on-site. Confirm with the recruiter where the office would be.",
+    );
+  }
   return { preferencesScore, parts, dealBreakers, warnings };
 }
 
