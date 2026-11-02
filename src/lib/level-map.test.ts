@@ -81,6 +81,12 @@ describe("level map", () => {
       levelLabel: "Microsoft L65 (IC5)",
     });
     expect(matchLevel("Company: Northwind\nLevel: L64", map).microsoftLevel).toBeNull();
+    expect(matchLevel("Company: Microsoft\nTechnical Program Management IC4", map)).toMatchObject({
+      microsoftLevel: 63,
+      microsoftLevelMin: 63,
+      microsoftLevelMax: 63,
+      levelLabel: "Microsoft L63 (IC4)",
+    });
   });
 
   it("edits a row, marks it, and resets it to the researched value", () => {
