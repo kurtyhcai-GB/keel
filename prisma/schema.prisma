@@ -125,6 +125,15 @@ model JobPosting {
   levelRaw       String?
   microsoftLevel Int?
   levelLabel     String?
+  /// Posted pay, annualized when the posting used an hourly range. Null when absent.
+  payMin         Int?
+  payMax         Int?
+  payCurrency    String?
+  /// year. Hourly postings are converted to a year before they are stored.
+  payPeriod      String?
+  payRaw         String?
+  /// JSON array of other ranges, such as a Bay Area or New York City band.
+  payRangesJson  String?
   /// pending | awaiting_preference | tracked | ruled_out.
   /// Skipping a scored job deletes the row. Ruling one out keeps it with a reason and no score.
   status            String  @default("pending")

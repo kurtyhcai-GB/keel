@@ -13,6 +13,7 @@ export function EvaluationView({
   location,
   worksite,
   level,
+  pay,
   requisitionId,
   summary,
   scored,
@@ -27,6 +28,7 @@ export function EvaluationView({
   location: string;
   worksite: string;
   level: string;
+  pay?: string | null;
   requisitionId: string;
   summary: string;
   scored: Pick<
@@ -56,6 +58,12 @@ export function EvaluationView({
             {location} / {worksite}
             <span className="px-1.5 text-border">·</span>
             {level}
+            {pay ? (
+              <>
+                <span className="px-1.5 text-border">·</span>
+                {pay}
+              </>
+            ) : null}
             <span className="px-1.5 text-border">·</span>
             {requisitionId}
           </p>

@@ -68,12 +68,29 @@ export const demoInput = z.object({
 
 const levelConfidence = z.enum(["high", "medium", "low"]);
 
+const levelPay = {
+  basePayMin: z.number().int().min(0).max(5_000_000).nullable().optional(),
+  basePayMax: z.number().int().min(0).max(5_000_000).nullable().optional(),
+  medianTotalComp: z.number().int().min(0).max(5_000_000).nullable().optional(),
+  paySource: z.string().trim().max(500).nullable().optional(),
+  payAsOf: z.string().trim().max(40).nullable().optional(),
+};
+
 const levelRange = {
   microsoftLevelMin: z.number().int().min(50).max(90),
   microsoftLevelMax: z.number().int().min(50).max(90),
   notes: z.string().max(4000).default(""),
   confidence: levelConfidence,
+  ...levelPay,
 };
+
+function payBandOrdered(value: { basePayMin?: number | null; basePayMax?: number | null }): boolean {
+  const hasMin = value.basePayMin != null;
+  const hasMax = value.basePayMax != null;
+  if (hasMin !== hasMax) return false;
+  if (hasMin && hasMax && value.basePayMin! > value.basePayMax!) return false;
+  return true;
+}
 
 export const levelEditInput = z
   .object({
@@ -84,6 +101,9 @@ export const levelEditInput = z
   })
   .refine((value) => value.microsoftLevelMin <= value.microsoftLevelMax, {
     message: "microsoftLevelMin must be less than or equal to microsoftLevelMax",
+  })
+  .refine(payBandOrdered, {
+    message: "basePayMin and basePayMax must both be set, with min at or below max",
   });
 
 export const levelAddInput = z
@@ -95,6 +115,9 @@ export const levelAddInput = z
   })
   .refine((value) => value.microsoftLevelMin <= value.microsoftLevelMax, {
     message: "microsoftLevelMin must be less than or equal to microsoftLevelMax",
+  })
+  .refine(payBandOrdered, {
+    message: "basePayMin and basePayMax must both be set, with min at or below max",
   });
 
 export const levelRowIdInput = z.object({

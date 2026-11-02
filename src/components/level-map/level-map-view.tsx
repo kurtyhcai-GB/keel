@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/client-api";
+import { formatUsd } from "@/lib/pay";
 
 type Confidence = "high" | "medium" | "low";
 type Origin = "researched" | "edited" | "added";
@@ -34,6 +35,11 @@ type LevelRow = {
   notes: string;
   source: string;
   origin: Origin;
+  basePayMin?: number | null;
+  basePayMax?: number | null;
+  medianTotalComp?: number | null;
+  paySource?: string | null;
+  payAsOf?: string | null;
 };
 
 type LevelMapResponse = {
@@ -50,6 +56,11 @@ type Draft = {
   microsoftLevelMax: string;
   confidence: Confidence;
   notes: string;
+  basePayMin: string;
+  basePayMax: string;
+  medianTotalComp: string;
+  paySource: string;
+  payAsOf: string;
 };
 
 type Editor =
@@ -80,6 +91,15 @@ function sourceLabel(source: string): string {
   }
 }
 
+function moneyInput(value: number | null | undefined): string {
+  return value == null ? "" : String(value);
+}
+
+function formatBase(min: number | null | undefined, max: number | null | undefined): string | null {
+  if (min == null || max == null) return null;
+  return min === max ? formatUsd(min) : `${formatUsd(min)}–${formatUsd(max)}`;
+}
+
 function draftFromRow(row: LevelRow): Draft {
   return {
     company: row.company,
@@ -89,6 +109,11 @@ function draftFromRow(row: LevelRow): Draft {
     microsoftLevelMax: String(row.microsoftLevelMax),
     confidence: row.confidence,
     notes: row.notes,
+    basePayMin: moneyInput(row.basePayMin),
+    basePayMax: moneyInput(row.basePayMax),
+    medianTotalComp: moneyInput(row.medianTotalComp),
+    paySource: row.paySource ?? "",
+    payAsOf: row.payAsOf ?? "",
   };
 }
 
@@ -101,6 +126,11 @@ function emptyDraft(): Draft {
     microsoftLevelMax: "65",
     confidence: "low",
     notes: "",
+    basePayMin: "",
+    basePayMax: "",
+    medianTotalComp: "",
+    paySource: "",
+    payAsOf: "",
   };
 }
 
@@ -169,7 +199,18 @@ export function LevelMapView() {
       if (band !== "all" && bandKey(row) !== band) return false;
       if (confidence !== "all" && row.confidence !== confidence) return false;
       if (!query) return true;
-      const haystack = [row.company, row.companyLevel, row.companyTitle, row.notes, row.displayLabel, row.source]
+      const haystack = [
+        row.company,
+        row.companyLevel,
+        row.companyTitle,
+        row.notes,
+        row.displayLabel,
+        row.source,
+        row.paySource,
+        row.basePayMin,
+        row.basePayMax,
+        row.medianTotalComp,
+      ]
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
@@ -224,6 +265,19 @@ export function LevelMapView() {
       toast.error("Company level is required.");
       return;
     }
+    const basePayMin = editor.draft.basePayMin.trim() ? Number(editor.draft.basePayMin) : null;
+    const basePayMax = editor.draft.basePayMax.trim() ? Number(editor.draft.basePayMax) : null;
+    const medianTotalComp = editor.draft.medianTotalComp.trim() ? Number(editor.draft.medianTotalComp) : null;
+    if ((basePayMin == null) !== (basePayMax == null) || (basePayMin != null && basePayMax != null && basePayMin > basePayMax)) {
+      toast.error("Enter both US base minimum and maximum, with the minimum at or below the maximum.");
+      return;
+    }
+    if (
+      [basePayMin, basePayMax, medianTotalComp].some((value) => value != null && (!Number.isInteger(value) || value < 0))
+    ) {
+      toast.error("Pay amounts are whole dollars per year.");
+      return;
+    }
     const body = {
       company: editor.draft.company.trim(),
       companyLevel: editor.draft.companyLevel.trim(),
@@ -232,6 +286,11 @@ export function LevelMapView() {
       microsoftLevelMax: max,
       confidence: editor.draft.confidence,
       notes: editor.draft.notes,
+      basePayMin,
+      basePayMax,
+      medianTotalComp,
+      paySource: editor.draft.paySource.trim() || null,
+      payAsOf: editor.draft.payAsOf.trim() || null,
     };
     setSaving(true);
     try {
@@ -382,6 +441,8 @@ export function LevelMapView() {
               <th className="px-3 py-2 font-medium">Company level</th>
               <th className="px-3 py-2 font-medium">Title</th>
               <th className="px-3 py-2 font-medium">Microsoft level</th>
+              <th className="px-3 py-2 font-medium">US base</th>
+              <th className="px-3 py-2 font-medium">Median TC</th>
               <th className="px-3 py-2 font-medium">Confidence</th>
               <th className="px-3 py-2 font-medium">Source</th>
               <th className="px-3 py-2 font-medium">Notes</th>
@@ -403,7 +464,7 @@ export function LevelMapView() {
             ))}
             {loaded && visible.length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-3 py-8 text-center text-sm text-muted-foreground">
+                <td colSpan={10} className="px-3 py-8 text-center text-sm text-muted-foreground">
                   No rows match these filters.
                 </td>
               </tr>
@@ -537,6 +598,62 @@ export function LevelMapView() {
                   <option value="high">High</option>
                 </select>
               </Label>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Label className="grid gap-1.5">
+                  US base min
+                  <Input
+                    inputMode="numeric"
+                    value={editor.draft.basePayMin}
+                    placeholder="119800"
+                    onChange={(event) =>
+                      setEditor({ ...editor, draft: { ...editor.draft, basePayMin: event.target.value } })
+                    }
+                  />
+                </Label>
+                <Label className="grid gap-1.5">
+                  US base max
+                  <Input
+                    inputMode="numeric"
+                    value={editor.draft.basePayMax}
+                    placeholder="234700"
+                    onChange={(event) =>
+                      setEditor({ ...editor, draft: { ...editor.draft, basePayMax: event.target.value } })
+                    }
+                  />
+                </Label>
+              </div>
+              <Label className="grid gap-1.5">
+                Median total comp
+                <Input
+                  inputMode="numeric"
+                  value={editor.draft.medianTotalComp}
+                  placeholder="245000"
+                  onChange={(event) =>
+                    setEditor({ ...editor, draft: { ...editor.draft, medianTotalComp: event.target.value } })
+                  }
+                />
+              </Label>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Label className="grid gap-1.5">
+                  Pay source
+                  <Input
+                    value={editor.draft.paySource}
+                    onChange={(event) =>
+                      setEditor({ ...editor, draft: { ...editor.draft, paySource: event.target.value } })
+                    }
+                  />
+                </Label>
+                <Label className="grid gap-1.5">
+                  Pay as of
+                  <Input
+                    value={editor.draft.payAsOf}
+                    placeholder="2026-10-31"
+                    onChange={(event) =>
+                      setEditor({ ...editor, draft: { ...editor.draft, payAsOf: event.target.value } })
+                    }
+                  />
+                </Label>
+              </div>
               <Label className="grid gap-1.5">
                 Notes
                 <Textarea
@@ -623,7 +740,7 @@ function GroupRows({
   return (
     <>
       <tr className="bg-muted/40">
-        <th colSpan={8} className="px-3 py-1.5 text-left text-xs font-medium text-foreground">
+        <th colSpan={10} className="px-3 py-1.5 text-left text-xs font-medium text-foreground">
           {label}
           <span className="ml-2 font-normal text-muted-foreground">{rows.length}</span>
         </th>
@@ -647,6 +764,18 @@ function GroupRows({
           <td className="px-3 py-2 align-top whitespace-nowrap">{row.companyLevel}</td>
           <td className="max-w-48 px-3 py-2 align-top text-muted-foreground">{row.companyTitle || "—"}</td>
           <td className="px-3 py-2 align-top whitespace-nowrap">{row.displayLabel}</td>
+          <td className="px-3 py-2 align-top whitespace-nowrap" title={row.paySource ?? undefined}>
+            {formatBase(row.basePayMin, row.basePayMax) ?? "—"}
+            {row.payAsOf && row.basePayMin != null && row.medianTotalComp == null ? (
+              <div className="text-xs text-muted-foreground">as of {row.payAsOf}</div>
+            ) : null}
+          </td>
+          <td className="px-3 py-2 align-top whitespace-nowrap" title={row.paySource ?? undefined}>
+            {row.medianTotalComp != null ? formatUsd(row.medianTotalComp) : "—"}
+            {row.payAsOf && row.medianTotalComp != null ? (
+              <div className="text-xs text-muted-foreground">as of {row.payAsOf}</div>
+            ) : null}
+          </td>
           <td className="px-3 py-2 align-top">
             {row.confidence === "low" ? (
               <Badge variant="outline" className="border-amber-400 bg-amber-100 text-amber-950 dark:bg-amber-950 dark:text-amber-100">

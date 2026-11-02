@@ -32,6 +32,7 @@ import type {
   TrackedJobView,
   WorkMode,
 } from "@/lib/types";
+import { formatPayLabel } from "@/lib/pay";
 import { formatLocationAndWorksite } from "@/lib/types";
 import type { z } from "zod";
 
@@ -640,6 +641,24 @@ function postingFields(text: string, preferences?: PreferenceView | null) {
   return parsePosting(text, loadLevelMap(), preferences);
 }
 
+function payColumns(parsed: {
+  payMin: number | null;
+  payMax: number | null;
+  payCurrency: string | null;
+  payPeriod: string | null;
+  payRaw: string | null;
+  payRanges: unknown[] | null;
+}) {
+  return {
+    payMin: parsed.payMin,
+    payMax: parsed.payMax,
+    payCurrency: parsed.payCurrency,
+    payPeriod: parsed.payPeriod,
+    payRaw: parsed.payRaw,
+    payRangesJson: parsed.payRanges && parsed.payRanges.length > 0 ? JSON.stringify(parsed.payRanges) : null,
+  };
+}
+
 export async function evaluateAndStore(input: {
   text: string;
   sourceType: "paste" | "url";
@@ -666,6 +685,7 @@ export async function evaluateAndStore(input: {
         levelRaw: parsed.levelRaw,
         microsoftLevel: parsed.microsoftLevel,
         levelLabel: parsed.levelLabel,
+        ...payColumns(parsed),
         status: "awaiting_preference",
         preferenceHoldJson: JSON.stringify(pauses),
       },
@@ -755,10 +775,23 @@ async function scoreStoredPosting(input: {
     mismatchesJson: JSON.stringify(draft.mismatches),
     preferencePartsJson: JSON.stringify(draft.preferenceParts),
   };
+  const postingPay = payColumns(draft);
   if (input.existing) {
     await getPrisma().jobPosting.update({
       where: { id: input.postingId },
-      data: { status: "pending", evaluation: { create: evaluationData } },
+      data: {
+        status: "pending",
+        title: draft.title,
+        company: draft.company,
+        requisitionId: draft.requisitionId,
+        location: draft.location,
+        worksite: draft.worksite,
+        levelRaw: draft.levelRaw,
+        microsoftLevel: draft.microsoftLevel,
+        levelLabel: draft.levelLabel,
+        ...postingPay,
+        evaluation: { create: evaluationData },
+      },
     });
   } else {
     await getPrisma().jobPosting.create({
@@ -776,6 +809,7 @@ async function scoreStoredPosting(input: {
         levelRaw: draft.levelRaw,
         microsoftLevel: draft.microsoftLevel,
         levelLabel: draft.levelLabel,
+        ...postingPay,
         status: "pending",
         evaluation: { create: evaluationData },
       },
@@ -857,6 +891,13 @@ export async function listTrackedJobs(sort: SortKey = "score", direction: "asc" 
       locationAndWorksite: formatLocationAndWorksite(row.jobPosting.location, row.jobPosting.worksite),
       level,
       microsoftLevel: asNumber(row.jobPosting.microsoftLevel),
+      payLabel: formatPayLabel({
+        payMin: asNumber(row.jobPosting.payMin),
+        payMax: asNumber(row.jobPosting.payMax),
+        payCurrency: row.jobPosting.payCurrency,
+        payPeriod: row.jobPosting.payPeriod,
+        payRaw: row.jobPosting.payRaw,
+      }),
       summary: row.evaluation.summary,
       strengths: parseJson(row.evaluation.strengthsJson, []),
       gaps: parseJson(row.evaluation.gapsJson, []),

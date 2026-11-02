@@ -221,4 +221,70 @@ describe("level map", () => {
     expect(after.microsoftLevelMax).toBe(64);
     expect(after.dealBreakers).toEqual([]);
   });
+
+  it("stores pay parsed from notes and the posted Microsoft base bands", () => {
+    const map = loadLevelMap();
+    expect(map.entries.find((entry) => entry.id === "microsoft-59")).toMatchObject({
+      medianTotalComp: 185_000,
+      basePayMin: null,
+      basePayMax: null,
+      payAsOf: "2026-10-31",
+    });
+    expect(map.entries.find((entry) => entry.id === "microsoft-60")).toMatchObject({
+      medianTotalComp: null,
+      basePayMin: null,
+      basePayMax: null,
+      paySource: null,
+      payAsOf: null,
+    });
+    expect(map.entries.find((entry) => entry.id === "microsoft-63")).toMatchObject({
+      basePayMin: 119_800,
+      basePayMax: 234_700,
+      medianTotalComp: 245_000,
+    });
+    expect(map.entries.find((entry) => entry.id === "microsoft-65")).toMatchObject({
+      basePayMin: 142_800,
+      basePayMax: 274_800,
+      medianTotalComp: 325_000,
+    });
+    expect(map.entries.find((entry) => entry.id === "google-l5")?.medianTotalComp).toBe(350_000);
+    expect(map.entries.find((entry) => entry.id === "oracle-ic-3")?.medianTotalComp).toBe(169_000);
+    expect(map.entries.find((entry) => entry.id === "boeing-l2")?.medianTotalComp).toBeNull();
+    expect(map.entries.find((entry) => entry.id === "t-mobile-l8")?.medianTotalComp).toBeNull();
+    expect(map.entries.every((entry) => entry.verification === entry.verification)).toBe(true);
+    expect(map.entries.find((entry) => entry.id === "microsoft-65")?.verification).toBe("anchor");
+    expect(map.entries.find((entry) => entry.id === "microsoft-65")?.confidence).toBe("high");
+  });
+
+  it("persists a pay edit in overrides and restores the researched pay", () => {
+    const updated = saveLevelMapOverride({
+      id: "google-l5",
+      companyLevel: "L5",
+      companyTitle: "Technical Program Manager III",
+      microsoftLevelMin: 63,
+      microsoftLevelMax: 64,
+      notes: "Corrected pay on this machine.",
+      confidence: "high",
+      basePayMin: 150_000,
+      basePayMax: 210_000,
+      medianTotalComp: 400_000,
+      paySource: "Recruiter conversation",
+      payAsOf: "2026-11-01",
+    });
+    expect(updated).toMatchObject({
+      origin: "edited",
+      basePayMin: 150_000,
+      basePayMax: 210_000,
+      medianTotalComp: 400_000,
+      paySource: "Recruiter conversation",
+      payAsOf: "2026-11-01",
+      confidence: "high",
+      verification: "reviewed",
+    });
+    const restored = resetLevelMapRow({ id: "google-l5" });
+    expect(restored.medianTotalComp).toBe(350_000);
+    expect(restored.basePayMin).toBeNull();
+    expect(restored.origin).toBe("researched");
+    expect(readFileSync(researchedFile, "utf8")).toBe(researchedBefore);
+  });
 });

@@ -83,6 +83,23 @@ export type EvaluationDraft = {
   microsoftLevelMin?: number | null;
   microsoftLevelMax?: number | null;
   levelLabel: string | null;
+  payMin: number | null;
+  payMax: number | null;
+  payCurrency: string | null;
+  payPeriod: string | null;
+  payRaw: string | null;
+  payRanges: Array<{
+    min: number;
+    max: number;
+    currency: string;
+    period: string;
+    kind: string | null;
+    scope: string;
+    label: string;
+  }> | null;
+  levelFromPay?: boolean;
+  payNote?: string | null;
+  confidence?: "high" | "medium" | "low" | null;
   skillsScore: number;
   preferencesScore: number | null;
   overallScore: number;
@@ -112,6 +129,7 @@ export type TrackedJobView = {
   locationAndWorksite: string;
   level: string | null;
   microsoftLevel: number | null;
+  payLabel: string | null;
   summary: string;
   strengths: ScorePoint[];
   gaps: ScorePoint[];

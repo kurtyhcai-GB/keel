@@ -91,7 +91,10 @@ export function TrackedView() {
                       {job.score}
                     </span>
                   </td>
-                  <td className="border-b px-2 py-3 font-medium">{job.title || "Untitled"}</td>
+                  <td className="border-b px-2 py-3 font-medium">
+                    <div>{job.title || "Untitled"}</div>
+                    {job.payLabel ? <div className="mt-0.5 text-xs font-normal text-muted-foreground">{job.payLabel}</div> : null}
+                  </td>
                   <td className="border-b px-2 py-3 text-muted-foreground">{job.requisitionId || "—"}</td>
                   <td className="border-b px-2 py-3">{job.company || "—"}</td>
                   <td className="border-b px-2 py-3">{job.locationAndWorksite || "—"}</td>
@@ -118,6 +121,7 @@ export function TrackedView() {
                   location={open.location || "Location unknown"}
                   worksite={open.worksite || "Worksite unknown"}
                   level={open.level || "Level unknown"}
+                  pay={open.payLabel}
                   requisitionId={open.requisitionId || "No req id"}
                   summary={open.summary}
                   strengths={open.strengths}
