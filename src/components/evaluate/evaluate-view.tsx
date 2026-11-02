@@ -9,6 +9,7 @@ import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/client-api";
+import { formatPayLabel } from "@/lib/pay";
 import type { EvaluationDraft, PreferenceMismatch } from "@/lib/types";
 
 type NeedsDecision = {
@@ -240,6 +241,7 @@ export function EvaluateView() {
             location={result.location || "Location unknown"}
             worksite={result.worksite || "Worksite unknown"}
             level={result.levelLabel || result.levelRaw || "Level unknown"}
+            pay={formatPayLabel(result)}
             requisitionId={result.requisitionId || "No req id"}
             summary={result.summary}
             rawText={result.rawText}

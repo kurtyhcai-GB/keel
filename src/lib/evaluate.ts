@@ -8,7 +8,9 @@ import {
   scorePreferences,
 } from "@/lib/fit";
 import { loadPrompt, parseModelJson, resolveProvider } from "@/lib/ai";
-import { loadLevelMap, matchLevel, type LevelMap } from "@/lib/level-map";
+import { loadLevelMap, matchLevel, type LevelMap, type LevelMatch } from "@/lib/level-map";
+import { applyPayToMatch } from "@/lib/level-pay";
+import { HOURS_PER_YEAR, parsePay, type ParsedPay, type PayKind, type StoredPayRange } from "@/lib/pay";
 import type {
   CitedFact,
   EvaluationDraft,
@@ -49,6 +51,25 @@ const modelSchema = z.object({
   levelRaw: z.string().nullish(),
   microsoftLevel: z.number().int().nullish(),
   levelLabel: z.string().nullish(),
+  payMin: z.number().nullish(),
+  payMax: z.number().nullish(),
+  payCurrency: z.string().nullish(),
+  payPeriod: z.enum(["year", "hour"]).nullish(),
+  payRaw: z.string().nullish(),
+  payKind: z.enum(["base", "total"]).nullish(),
+  payRanges: z
+    .array(
+      z.object({
+        min: z.number(),
+        max: z.number(),
+        currency: z.string().nullish(),
+        period: z.enum(["year", "hour"]).nullish(),
+        kind: z.enum(["base", "total"]).nullish(),
+        scope: z.enum(["us", "location", "other"]).nullish(),
+        label: z.string().nullish(),
+      }),
+    )
+    .nullish(),
   skillsScore: z.number(),
   preferencesScore: z.number().nullish(),
   overallScore: z.number(),
@@ -137,16 +158,24 @@ export function parsePosting(text: string, map: LevelMap, preferences?: Preferen
       .map((line) => line.trim())
       .find((line) => line.length > 0 && !/^(company|employer|location|worksite|job id|level)\b/i.test(line)) ??
     null;
-  const level = matchLevel(text, map);
+  const company = labeledLine(text, ["company", "employer"]);
+  const pay = parsePay(text);
+  const level = applyPayToMatch(matchLevel(text, map), pay, text, map, company);
   return {
     title: title?.slice(0, 160) ?? null,
-    company: labeledLine(text, ["company", "employer"]),
+    company,
     requisitionId:
       text.match(
         /(?:requisition(?:\s*id)?|req(?:uisition)?\s*id|job\s*id|job\s*#)\s*[:#]?\s*([A-Za-z0-9][A-Za-z0-9-]{2,})/i,
       )?.[1] ?? null,
     location: chooseLocation(text, preferences),
     worksite: parseWorksite(text),
+    payMin: pay.payMin,
+    payMax: pay.payMax,
+    payCurrency: pay.payCurrency,
+    payPeriod: pay.payPeriod,
+    payRaw: pay.payRaw,
+    payRanges: pay.payRanges,
     ...level,
   };
 }
@@ -269,11 +298,18 @@ export function scoreLocally(input: {
       levelLabel: parsed.levelLabel,
       preferences: input.preferences,
       mismatches: acknowledged,
+      levelFromPay: parsed.levelFromPay,
+      payNote: parsed.payNote,
+      levelSourceNote: parsed.levelSourceNote,
     });
     preferencesScore = preferenceScore.preferencesScore;
     dealBreakers = preferenceScore.dealBreakers;
     preferenceParts = preferenceScore.parts;
     warnings.push(...preferenceScore.warnings);
+  }
+  if (parsed.payNote) warnings.push(parsed.payNote);
+  if (parsed.levelFromPay) {
+    warnings.push("The Microsoft-equivalent level was estimated from posted pay, not from a level title.");
   }
 
   const skillsWeight = input.preferences?.skillsWeight ?? DEFAULT_SKILLS_WEIGHT;
@@ -324,6 +360,85 @@ function keepKnown(points: ScorePoint[], ids: Set<string>, dropIfEmpty: boolean,
   return kept;
 }
 
+function blankLevel(): LevelMatch {
+  return {
+    levelRaw: null,
+    microsoftLevel: null,
+    microsoftLevelMin: null,
+    microsoftLevelMax: null,
+    levelLabel: null,
+    confidence: null,
+    entryId: null,
+    levelFromPay: false,
+    payNote: null,
+    levelSourceNote: null,
+  };
+}
+
+function kindFromRaw(payRaw: string | null, explicit: PayKind | null): PayKind | null {
+  if (explicit) return explicit;
+  if (!payRaw) return null;
+  if (/base pay|base salary/i.test(payRaw)) return "base";
+  if (/total compensation|total comp/i.test(payRaw)) return "total";
+  return null;
+}
+
+function mergedPay(
+  value: {
+    payMin?: number | null;
+    payMax?: number | null;
+    payCurrency?: string | null;
+    payPeriod?: "year" | "hour" | null;
+    payRaw?: string | null;
+    payKind?: PayKind | null;
+    payRanges?: Array<{
+      min: number;
+      max: number;
+      currency?: string | null;
+      period?: "year" | "hour" | null;
+      kind?: PayKind | null;
+      scope?: "us" | "location" | "other" | null;
+      label?: string | null;
+    }> | null;
+  },
+  local: EvaluationDraft,
+): ParsedPay {
+  let payMin = value.payMin ?? local.payMin;
+  let payMax = value.payMax ?? local.payMax;
+  let payPeriod = value.payPeriod ?? (local.payPeriod === "hour" || local.payPeriod === "year" ? local.payPeriod : null);
+  if (payPeriod === "hour" && payMin != null) {
+    payMin = Math.round(payMin * HOURS_PER_YEAR);
+    payMax = payMax == null ? null : Math.round(payMax * HOURS_PER_YEAR);
+    payPeriod = "year";
+  }
+  const payRaw = value.payRaw ?? local.payRaw;
+  const sourceRanges = value.payRanges ?? local.payRanges ?? [];
+  const payRanges: StoredPayRange[] = sourceRanges.map((range) => {
+    const hourly = range.period === "hour";
+    const scale = hourly ? HOURS_PER_YEAR : 1;
+    const kind = range.kind === "base" || range.kind === "total" ? range.kind : null;
+    const scope = range.scope === "us" || range.scope === "location" || range.scope === "other" ? range.scope : "other";
+    return {
+      min: Math.round(range.min * scale),
+      max: Math.round(range.max * scale),
+      currency: range.currency ?? "USD",
+      period: "year" as const,
+      kind,
+      scope,
+      label: range.label ?? "",
+    };
+  });
+  return {
+    payMin: payMin ?? null,
+    payMax: payMax ?? null,
+    payCurrency: value.payCurrency ?? local.payCurrency ?? (payMin != null ? "USD" : null),
+    payPeriod: payMin != null ? "year" : null,
+    payRaw: payRaw ?? null,
+    payKind: kindFromRaw(payRaw ?? null, value.payKind ?? null),
+    payRanges,
+  };
+}
+
 function mergedLevelBand(
   merged: {
     company: string | null;
@@ -332,35 +447,50 @@ function mergedLevelBand(
     microsoftLevel: number | null;
     microsoftLevelMin: number | null;
     microsoftLevelMax: number | null;
+    levelFromPay?: boolean;
+    payNote?: string | null;
   },
+  pay: ParsedPay,
   map: LevelMap,
-): { microsoftLevelMin: number | null; microsoftLevelMax: number | null; levelLabel: string | null } {
+): LevelMatch {
   const probe = [merged.company, merged.levelRaw, merged.levelLabel].filter(Boolean).join("\n");
-  const matched = probe ? matchLevel(probe, map) : null;
-  const mapped =
-    matched && matched.microsoftLevelMin != null && matched.microsoftLevelMax != null ? matched : null;
+  const token = probe ? matchLevel(probe, map) : blankLevel();
+  const withPay = applyPayToMatch(token, pay, probe, map, merged.company);
   const modelLevel = merged.microsoftLevel;
+  const tokenHit = token.entryId != null && token.microsoftLevelMin != null && token.microsoftLevelMax != null;
   if (
-    mapped &&
-    (modelLevel == null || (modelLevel >= mapped.microsoftLevelMin! && modelLevel <= mapped.microsoftLevelMax!))
+    tokenHit &&
+    (modelLevel == null || (modelLevel >= token.microsoftLevelMin! && modelLevel <= token.microsoftLevelMax!))
   ) {
     return {
-      microsoftLevelMin: mapped.microsoftLevelMin,
-      microsoftLevelMax: mapped.microsoftLevelMax,
-      levelLabel: merged.levelLabel ?? mapped.levelLabel,
+      ...token,
+      levelLabel: merged.levelLabel ?? token.levelLabel,
+      microsoftLevel: modelLevel ?? token.microsoftLevel,
+      payNote: withPay.payNote,
+      levelFromPay: false,
+      levelSourceNote: null,
     };
   }
   if (modelLevel != null) {
     return {
+      ...blankLevel(),
+      microsoftLevel: modelLevel,
       microsoftLevelMin: modelLevel,
       microsoftLevelMax: modelLevel,
       levelLabel: merged.levelLabel,
+      levelRaw: merged.levelRaw,
     };
   }
+  if (withPay.levelFromPay) return { ...withPay, levelRaw: merged.levelRaw ?? withPay.levelRaw };
   return {
+    ...blankLevel(),
+    levelRaw: merged.levelRaw,
+    microsoftLevel: merged.microsoftLevel,
     microsoftLevelMin: merged.microsoftLevelMin,
     microsoftLevelMax: merged.microsoftLevelMax,
     levelLabel: merged.levelLabel,
+    levelFromPay: merged.levelFromPay ?? false,
+    payNote: merged.payNote ?? null,
   };
 }
 
@@ -396,17 +526,20 @@ export function normalizeModelEvaluation(
   const location = value.location ?? local.location;
   const worksite = value.worksite ?? local.worksite;
   const levelRaw = value.levelRaw ?? local.levelRaw;
-  const microsoftLevel = value.microsoftLevel ?? local.microsoftLevel;
   const company = value.company ?? local.company;
+  const pay = mergedPay(value, local);
   const band = mergedLevelBand(
     {
       company,
       levelRaw,
       levelLabel: value.levelLabel ?? local.levelLabel,
-      microsoftLevel,
+      microsoftLevel: value.microsoftLevel ?? local.microsoftLevel,
       microsoftLevelMin: local.microsoftLevelMin ?? null,
       microsoftLevelMax: local.microsoftLevelMax ?? null,
+      levelFromPay: local.levelFromPay,
+      payNote: local.payNote,
     },
+    pay,
     loadLevelMap(),
   );
   const priorMismatches = input.acknowledgedMismatches ?? local.mismatches;
@@ -428,11 +561,18 @@ export function normalizeModelEvaluation(
       levelLabel: band.levelLabel,
       preferences: input.preferences,
       mismatches,
+      levelFromPay: band.levelFromPay,
+      payNote: band.payNote,
+      levelSourceNote: band.levelSourceNote,
     });
     preferencesScore = preferenceScore.preferencesScore;
     dealBreakers = preferenceScore.dealBreakers;
     preferenceParts = preferenceScore.parts;
     warnings.push(...preferenceScore.warnings);
+  }
+  if (band.payNote) warnings.push(band.payNote);
+  if (band.levelFromPay) {
+    warnings.push("The Microsoft-equivalent level was estimated from posted pay, not from a level title.");
   }
   const overallScore = overallFit(
     skillsScore,
@@ -447,10 +587,19 @@ export function normalizeModelEvaluation(
     location,
     worksite,
     levelRaw,
-    microsoftLevel,
+    microsoftLevel: band.microsoftLevel,
     microsoftLevelMin: band.microsoftLevelMin,
     microsoftLevelMax: band.microsoftLevelMax,
     levelLabel: band.levelLabel,
+    payMin: pay.payMin,
+    payMax: pay.payMax,
+    payCurrency: pay.payCurrency,
+    payPeriod: pay.payPeriod,
+    payRaw: pay.payRaw,
+    payRanges: pay.payRanges,
+    levelFromPay: band.levelFromPay,
+    payNote: band.payNote,
+    confidence: band.confidence,
     skillsScore,
     preferencesScore,
     overallScore,

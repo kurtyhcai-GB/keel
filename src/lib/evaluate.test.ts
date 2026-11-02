@@ -270,3 +270,102 @@ describe("microsoft hub posting parse", () => {
     expect(result.preferenceParts.find((part) => part.id === "location")?.detail).toContain("Redmond, WA");
   });
 });
+
+describe("pay and level mapping", () => {
+  const payPrefs: PreferenceView = {
+    locations: ["Redmond, WA"],
+    workModes: ["remote", "hybrid"],
+    commuteToleranceMinutes: 45,
+    targetLevelMin: 63,
+    targetLevelMax: 65,
+    skillsWeight: 65,
+    notes: null,
+  };
+
+  it("estimates a Microsoft band from posted pay when no level token matches", () => {
+    const jobText = [
+      "Company: Contoso",
+      "Location: Redmond, WA",
+      "Worksite: Remote",
+      "The typical base pay range for this role across the U.S. is USD $119,800 - $234,700 per year.",
+      "",
+      "Requirements:",
+      "- technical program management",
+    ].join("\n");
+    const result = scoreLocally({ jobText, facts: [fact], preferences: payPrefs });
+    expect(result.payMin).toBe(119_800);
+    expect(result.payMax).toBe(234_700);
+    expect(result.levelLabel).toBe("about L63-64 (estimated from pay)");
+    expect(result.levelFromPay).toBe(true);
+    expect(result.microsoftLevelMin).toBe(63);
+    expect(result.microsoftLevelMax).toBe(64);
+    expect(result.confidence).toBe("low");
+    const level = result.preferenceParts.find((part) => part.id === "level");
+    expect(level?.detail).toMatch(/came from posted pay/i);
+    expect(level?.detail).toMatch(/about L63-64/);
+    expect(level?.score).toBe(100);
+  });
+
+  it("keeps a level token match and warns when pay is clearly inconsistent", () => {
+    const jobText = [
+      "Company: Microsoft",
+      "Location: Redmond, WA",
+      "Worksite: Remote",
+      "Level: L65",
+      "The typical base pay range for this role across the U.S. is USD $102,100 - $202,200 per year.",
+      "",
+      "Requirements:",
+      "- technical program management",
+    ].join("\n");
+    const result = scoreLocally({ jobText, facts: [fact], preferences: payPrefs });
+    expect(result.levelLabel).toBe("Microsoft L65 (IC5)");
+    expect(result.microsoftLevel).toBe(65);
+    expect(result.levelFromPay).toBe(false);
+    expect(result.payNote).toMatch(/closer to about L61-62/i);
+    expect(result.payNote).toMatch(/level title match was kept/i);
+    expect(result.warnings.some((warning) => /level title match was kept/i.test(warning))).toBe(true);
+    const level = result.preferenceParts.find((part) => part.id === "level");
+    expect(level?.detail).toMatch(/level title match was kept/i);
+    expect(level?.score).toBe(100);
+  });
+
+  it("rescores from model pay when the local parse had no level and no pay", () => {
+    const jobText = ["Program manager role.", "", "Requirements:", "- technical program management"].join("\n");
+    const local = scoreLocally({ jobText, facts: [fact], preferences: payPrefs });
+    expect(local.microsoftLevel).toBeNull();
+    expect(local.payMin).toBeNull();
+    const normalized = normalizeModelEvaluation(
+      {
+        title: "Technical Program Manager",
+        company: "Microsoft",
+        location: "Redmond, WA",
+        worksite: "Remote",
+        levelRaw: null,
+        microsoftLevel: null,
+        levelLabel: null,
+        payMin: 119_800,
+        payMax: 234_700,
+        payCurrency: "USD",
+        payPeriod: "year",
+        payRaw: "The typical base pay range for this role across the U.S. is USD $119,800 - $234,700 per year.",
+        payKind: "base",
+        skillsScore: 80,
+        preferencesScore: 10,
+        overallScore: 10,
+        summary: "Model summary.",
+        strengths: [{ text: "Real citation.", factIds: ["f1"] }],
+        gaps: [],
+        dealBreakers: [],
+      },
+      { facts: [fact], preferences: payPrefs, jobText },
+      local,
+      { provider: "mock", model: "mock" },
+    );
+    expect(normalized.payMin).toBe(119_800);
+    expect(normalized.payMax).toBe(234_700);
+    expect(normalized.levelLabel).toBe("about L63-64 (estimated from pay)");
+    expect(normalized.levelFromPay).toBe(true);
+    expect(normalized.preferenceParts.find((part) => part.id === "level")?.detail).toMatch(/came from posted pay/i);
+    expect(normalized.preferencesScore).not.toBe(10);
+  });
+});

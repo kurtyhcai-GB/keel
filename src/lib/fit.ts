@@ -137,6 +137,9 @@ export function scorePreferences(input: {
   levelLabel: string | null;
   preferences: PreferenceView;
   mismatches: PreferenceMismatch[];
+  levelFromPay?: boolean;
+  payNote?: string | null;
+  levelSourceNote?: string | null;
 }): { preferencesScore: number; parts: PreferencePart[]; dealBreakers: ScorePoint[]; warnings: string[] } {
   const locationMismatch = input.mismatches.some((item) => item.kind === "location");
   const worksiteMismatch = input.mismatches.some((item) => item.kind === "worksite");
@@ -187,13 +190,18 @@ export function scorePreferences(input: {
   const levelKnown = distance != null;
   const levelScore = !levelKnown ? 0 : distance === 0 ? 100 : distance === 1 ? 55 : 20;
   const levelLabel = input.levelLabel ?? "The mapped level";
-  const levelDetail = !levelKnown
+  const placement = !levelKnown
     ? "No Microsoft-equivalent level was mapped, so level is not scored."
     : distance === 0
       ? `${levelLabel} sits inside ${input.preferences.targetLevelMin}–${input.preferences.targetLevelMax}.`
       : distance === 1
         ? `${levelLabel} is one level outside ${input.preferences.targetLevelMin}–${input.preferences.targetLevelMax}. That is a stretch, not a deal-breaker.`
         : `${levelLabel} is ${distance} levels outside ${input.preferences.targetLevelMin}–${input.preferences.targetLevelMax}.`;
+  const fromPay =
+    input.levelFromPay && levelKnown
+      ? `This level came from posted pay.${input.levelSourceNote ? ` ${input.levelSourceNote}` : ""}`
+      : "";
+  const levelDetail = [fromPay, placement, input.payNote ?? ""].filter(Boolean).join(" ");
 
   const parts: PreferencePart[] = [
     {

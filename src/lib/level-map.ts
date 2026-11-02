@@ -17,6 +17,11 @@ const entrySchema = z.object({
   confidence: z.enum(["high", "medium", "low"]),
   verification: z.enum(["anchor", "reviewed", "unverified-example", "example-from-owner"]),
   source: z.string(),
+  basePayMin: z.number().int().nonnegative().nullable().default(null),
+  basePayMax: z.number().int().nonnegative().nullable().default(null),
+  medianTotalComp: z.number().int().nonnegative().nullable().default(null),
+  paySource: z.string().nullable().default(null),
+  payAsOf: z.string().nullable().default(null),
   notes: z.string(),
 });
 
@@ -42,6 +47,11 @@ type RowPatch = {
   microsoftLevelMax?: number;
   confidence?: LevelMapEntry["confidence"];
   notes?: string;
+  basePayMin?: number | null;
+  basePayMax?: number | null;
+  medianTotalComp?: number | null;
+  paySource?: string | null;
+  payAsOf?: string | null;
 };
 
 type AddedRow = {
@@ -54,6 +64,11 @@ type AddedRow = {
   confidence: LevelMapEntry["confidence"];
   notes: string;
   source: string;
+  basePayMin: number | null;
+  basePayMax: number | null;
+  medianTotalComp: number | null;
+  paySource: string | null;
+  payAsOf: string | null;
 };
 
 type OverrideStore = {
@@ -80,6 +95,22 @@ function emptyStore(): OverrideStore {
   return { schemaVersion: 2, edits: {}, added: [], deleted: [] };
 }
 
+function readMoney(row: Record<string, unknown>, key: string): number | null | undefined {
+  if (!(key in row)) return undefined;
+  const value = row[key];
+  if (value === null) return null;
+  if (typeof value === "number" && Number.isFinite(value)) return Math.round(value);
+  return undefined;
+}
+
+function readText(row: Record<string, unknown>, key: string): string | null | undefined {
+  if (!(key in row)) return undefined;
+  const value = row[key];
+  if (value === null) return null;
+  if (typeof value === "string") return value;
+  return undefined;
+}
+
 function asPatch(value: unknown): RowPatch | null {
   if (!value || typeof value !== "object") return null;
   const row = value as Record<string, unknown>;
@@ -92,6 +123,16 @@ function asPatch(value: unknown): RowPatch | null {
     patch.confidence = row.confidence;
   }
   if (typeof row.notes === "string") patch.notes = row.notes;
+  const basePayMin = readMoney(row, "basePayMin");
+  const basePayMax = readMoney(row, "basePayMax");
+  const medianTotalComp = readMoney(row, "medianTotalComp");
+  const paySource = readText(row, "paySource");
+  const payAsOf = readText(row, "payAsOf");
+  if (basePayMin !== undefined) patch.basePayMin = basePayMin;
+  if (basePayMax !== undefined) patch.basePayMax = basePayMax;
+  if (medianTotalComp !== undefined) patch.medianTotalComp = medianTotalComp;
+  if (paySource !== undefined) patch.paySource = paySource;
+  if (payAsOf !== undefined) patch.payAsOf = payAsOf;
   return patch;
 }
 
@@ -103,6 +144,11 @@ function asAdded(value: unknown): AddedRow | null {
   }
   if (typeof row.microsoftLevelMin !== "number" || typeof row.microsoftLevelMax !== "number") return null;
   if (row.confidence !== "high" && row.confidence !== "medium" && row.confidence !== "low") return null;
+  const basePayMin = readMoney(row, "basePayMin");
+  const basePayMax = readMoney(row, "basePayMax");
+  const medianTotalComp = readMoney(row, "medianTotalComp");
+  const paySource = readText(row, "paySource");
+  const payAsOf = readText(row, "payAsOf");
   return {
     id: row.id,
     company: row.company,
@@ -113,6 +159,11 @@ function asAdded(value: unknown): AddedRow | null {
     confidence: row.confidence,
     notes: typeof row.notes === "string" ? row.notes : "",
     source: typeof row.source === "string" && row.source.trim() ? row.source : "Added on this machine",
+    basePayMin: basePayMin ?? null,
+    basePayMax: basePayMax ?? null,
+    medianTotalComp: medianTotalComp ?? null,
+    paySource: paySource ?? null,
+    payAsOf: payAsOf ?? null,
   };
 }
 
@@ -180,11 +231,26 @@ function applyPatch(entry: LevelMapEntry, patch: RowPatch): LevelMapEntry {
     microsoftLevel: midpoint(microsoftLevelMin, microsoftLevelMax),
     confidence,
     notes: patch.notes ?? entry.notes,
+    basePayMin: patch.basePayMin !== undefined ? patch.basePayMin : entry.basePayMin,
+    basePayMax: patch.basePayMax !== undefined ? patch.basePayMax : entry.basePayMax,
+    medianTotalComp: patch.medianTotalComp !== undefined ? patch.medianTotalComp : entry.medianTotalComp,
+    paySource: patch.paySource !== undefined ? patch.paySource : entry.paySource,
+    payAsOf: patch.payAsOf !== undefined ? patch.payAsOf : entry.payAsOf,
     displayLabel: formatDisplayLabel(microsoftLevelMin, microsoftLevelMax, entry.icNickname),
     verification:
       confidence === "high" && entry.verification === "unverified-example" ? "reviewed" : entry.verification,
   };
   return entrySchema.parse(next);
+}
+
+function sameMoney(patchValue: number | null | undefined, entryValue: number | null): boolean {
+  if (patchValue === undefined) return true;
+  return patchValue === entryValue;
+}
+
+function sameText(patchValue: string | null | undefined, entryValue: string | null): boolean {
+  if (patchValue === undefined) return true;
+  return (patchValue ?? "") === (entryValue ?? "");
 }
 
 function sameAsResearched(entry: LevelMapEntry, patch: RowPatch): boolean {
@@ -196,7 +262,12 @@ function sameAsResearched(entry: LevelMapEntry, patch: RowPatch): boolean {
     (patch.microsoftLevelMin ?? entry.microsoftLevelMin) === entry.microsoftLevelMin &&
     (patch.microsoftLevelMax ?? entry.microsoftLevelMax) === entry.microsoftLevelMax &&
     (patch.confidence ?? entry.confidence) === entry.confidence &&
-    (patch.notes ?? entry.notes) === entry.notes
+    (patch.notes ?? entry.notes) === entry.notes &&
+    sameMoney(patch.basePayMin, entry.basePayMin) &&
+    sameMoney(patch.basePayMax, entry.basePayMax) &&
+    sameMoney(patch.medianTotalComp, entry.medianTotalComp) &&
+    sameText(patch.paySource, entry.paySource) &&
+    sameText(patch.payAsOf, entry.payAsOf)
   );
 }
 
@@ -214,6 +285,11 @@ function addedToEntry(row: AddedRow): LevelMapEntry {
     confidence: row.confidence,
     verification: row.confidence === "high" ? "reviewed" : "unverified-example",
     source: row.source,
+    basePayMin: row.basePayMin,
+    basePayMax: row.basePayMax,
+    medianTotalComp: row.medianTotalComp,
+    paySource: row.paySource,
+    payAsOf: row.payAsOf,
     notes: row.notes,
   });
 }
@@ -279,6 +355,11 @@ export function saveLevelMapOverride(input: unknown): LevelMapRow {
       microsoftLevelMax: parsed.microsoftLevelMax,
       confidence: parsed.confidence,
       notes: parsed.notes,
+      basePayMin: parsed.basePayMin !== undefined ? parsed.basePayMin : current.basePayMin,
+      basePayMax: parsed.basePayMax !== undefined ? parsed.basePayMax : current.basePayMax,
+      medianTotalComp: parsed.medianTotalComp !== undefined ? parsed.medianTotalComp : current.medianTotalComp,
+      paySource: parsed.paySource === undefined ? current.paySource : parsed.paySource,
+      payAsOf: parsed.payAsOf === undefined ? current.payAsOf : parsed.payAsOf,
     };
     writeOverrides(store);
     return requireRow(parsed.id);
@@ -296,6 +377,11 @@ export function saveLevelMapOverride(input: unknown): LevelMapRow {
     confidence: parsed.confidence,
     notes: parsed.notes,
   };
+  if (parsed.basePayMin !== undefined) patch.basePayMin = parsed.basePayMin;
+  if (parsed.basePayMax !== undefined) patch.basePayMax = parsed.basePayMax;
+  if (parsed.medianTotalComp !== undefined) patch.medianTotalComp = parsed.medianTotalComp;
+  if (parsed.paySource !== undefined) patch.paySource = parsed.paySource;
+  if (parsed.payAsOf !== undefined) patch.payAsOf = parsed.payAsOf;
   if (sameAsResearched(base, patch)) {
     delete store.edits[parsed.id];
   } else {
@@ -330,6 +416,11 @@ export function addLevelMapRow(input: unknown): LevelMapRow {
     confidence: parsed.confidence,
     notes: parsed.notes,
     source: "Added on this machine",
+    basePayMin: parsed.basePayMin ?? null,
+    basePayMax: parsed.basePayMax ?? null,
+    medianTotalComp: parsed.medianTotalComp ?? null,
+    paySource: parsed.paySource ?? null,
+    payAsOf: parsed.payAsOf ?? null,
   });
   store.deleted = store.deleted.filter((existing) => existing !== id);
   writeOverrides(store);
@@ -380,7 +471,15 @@ export type LevelMatch = {
   levelLabel: string | null;
   confidence: LevelMapEntry["confidence"] | null;
   entryId: string | null;
+  /** True when the Microsoft band was inferred from posted pay, not a level token. */
+  levelFromPay: boolean;
+  /** Set when posted pay is clearly inconsistent with a level-token match. The token match is kept. */
+  payNote: string | null;
+  /** Extra sentence for the preferences level detail when the band came from pay. */
+  levelSourceNote: string | null;
 };
+
+const NO_PAY_MATCH = { levelFromPay: false, payNote: null, levelSourceNote: null } as const;
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -428,6 +527,7 @@ export function matchLevel(text: string, map: LevelMap): LevelMatch {
       levelLabel: null,
       confidence: null,
       entryId: null,
+      ...NO_PAY_MATCH,
     };
   }
 
@@ -446,5 +546,6 @@ export function matchLevel(text: string, map: LevelMap): LevelMatch {
     levelLabel: best.entry.displayLabel,
     confidence: best.entry.confidence,
     entryId: best.entry.id,
+    ...NO_PAY_MATCH,
   };
 }
