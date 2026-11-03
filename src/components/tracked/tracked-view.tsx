@@ -1,9 +1,19 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ArrowDown, ArrowUp, ChevronsUpDown } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronsUpDown, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 import { EvaluationView } from "@/components/evaluation-view";
 import { PageHeader } from "@/components/page-header";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { api } from "@/lib/client-api";
 import { scoreChipClass } from "@/lib/score-style";
@@ -27,6 +37,8 @@ export function TrackedView() {
   const [sortKey, setSortKey] = useState<SortKey>("score");
   const [direction, setDirection] = useState<"asc" | "desc">("desc");
   const [openId, setOpenId] = useState<string | null>(null);
+  const [pending, setPending] = useState<TrackedJobView | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -45,6 +57,22 @@ export function TrackedView() {
 
   const rows = useMemo(() => jobs, [jobs]);
   const open = rows.find((job) => job.id === openId) ?? null;
+
+  async function confirmDelete() {
+    if (!pending || deleting) return;
+    const target = pending;
+    setDeleting(true);
+    try {
+      await api(`/api/jobs/${target.jobPostingId}`, { method: "DELETE" });
+      setJobs((current) => current.filter((job) => job.id !== target.id));
+      if (openId === target.id) setOpenId(null);
+      setPending(null);
+    } catch (reason: unknown) {
+      toast.error(reason instanceof Error ? reason.message : "Could not delete this job.");
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) {
@@ -81,6 +109,9 @@ export function TrackedView() {
                     </button>
                   </th>
                 ))}
+                <th className="w-28 border-b px-2 py-2 text-left font-medium">
+                  <span className="sr-only">Actions</span>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -99,6 +130,22 @@ export function TrackedView() {
                   <td className="border-b px-2 py-3">{job.company || "—"}</td>
                   <td className="border-b px-2 py-3">{job.locationAndWorksite || "—"}</td>
                   <td className="border-b px-2 py-3">{job.level || "—"}</td>
+                  <td className="border-b px-2 py-3">
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="sm"
+                      aria-label={`Delete ${job.title || "Untitled"} at ${job.company || "unknown company"}`}
+                      disabled={deleting && pending?.id === job.id}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setPending(job);
+                      }}
+                    >
+                      <Trash2 />
+                      Delete
+                    </Button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -113,6 +160,18 @@ export function TrackedView() {
               <SheetHeader>
                 <SheetTitle>{open.title || "Evaluation"}</SheetTitle>
                 <SheetDescription>{open.company}</SheetDescription>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  size="sm"
+                  className="mt-2 w-fit"
+                  aria-label={`Delete ${open.title || "Untitled"} at ${open.company || "unknown company"}`}
+                  disabled={deleting && pending?.id === open.id}
+                  onClick={() => setPending(open)}
+                >
+                  <Trash2 />
+                  Delete
+                </Button>
               </SheetHeader>
               <div className="px-4 pb-6">
                 <EvaluationView
@@ -143,6 +202,29 @@ export function TrackedView() {
           ) : null}
         </SheetContent>
       </Sheet>
+
+      <Dialog open={pending !== null} onOpenChange={(next) => !next && !deleting && setPending(null)}>
+        <DialogContent showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle>
+              Delete {pending?.title || "Untitled"} at {pending?.company || "unknown company"}?
+            </DialogTitle>
+            <DialogDescription>
+              This permanently deletes the posting and everything linked to it: evaluations, tailored resumes and
+              cover letters, saved application answers, notes, and status. This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" disabled={deleting} onClick={() => setPending(null)}>
+              Cancel
+            </Button>
+            <Button type="button" variant="destructive" disabled={deleting} onClick={() => void confirmDelete()}>
+              <Trash2 />
+              {deleting ? "Deleting…" : "Delete"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
