@@ -14,7 +14,7 @@ export type ProviderResolution =
   | { mode: "ready"; provider: AiProvider }
   | { mode: "misconfigured"; message: string };
 
-export type PromptName = "extract-baseline" | "evaluate-posting" | "tailor-materials";
+export type PromptName = "extract-baseline" | "evaluate-posting" | "tailor-resume" | "tailor-cover" | "tailor-answer";
 
 export function loadPrompt(name: PromptName): string {
   const file = path.join(process.cwd(), "prompts", `${name}.md`);

@@ -45,7 +45,7 @@ function mockEvaluate(blob: string): string {
   });
 }
 
-function mockTailor(blob: string): string {
+function mockResume(blob: string): string {
   const ids = factIds(blob);
   const factId = ids[0] ?? null;
   return JSON.stringify({
@@ -58,8 +58,20 @@ function mockTailor(blob: string): string {
         sourceExcerpt: null,
       },
     ],
+  });
+}
+
+function mockCover(): string {
+  return JSON.stringify({
     coverLetter:
       "This mock letter does not add employers, dates, or metrics. Confirm it against the baseline before sending.",
+  });
+}
+
+function mockAnswer(): string {
+  return JSON.stringify({
+    answer:
+      "This mock answer only restates that the baseline was sent. It does not add employers, dates, metrics, or credentials.",
   });
 }
 
@@ -71,9 +83,13 @@ export class MockProvider implements AiProvider {
     const blob = request.messages.map((message) => message.content).join("\n");
     const text = blob.includes("EXTRACT_BASELINE")
       ? mockExtract()
-      : blob.includes("TAILOR_MATERIALS")
-        ? mockTailor(blob)
-        : mockEvaluate(blob);
+      : blob.includes("TAILOR_ANSWER")
+        ? mockAnswer()
+        : blob.includes("TAILOR_COVER")
+          ? mockCover()
+          : blob.includes("TAILOR_RESUME") || blob.includes("TAILOR_MATERIALS")
+            ? mockResume(blob)
+            : mockEvaluate(blob);
     return { text, provider: this.id, model: this.model };
   }
 }
