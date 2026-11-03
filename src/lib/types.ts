@@ -170,6 +170,37 @@ export type TailorDraft = {
   createdAt?: string;
 };
 
+export type TailorOutputView = {
+  id: string;
+  jobPostingId: string;
+  createdAt: string;
+  resumeEdits: ResumeEdit[];
+  coverLetter: string;
+  warnings: string[];
+  resumeWarnings: string[];
+  coverWarnings: string[];
+  provider: string;
+  model: string | null;
+  resumeProvider: string | null;
+  coverProvider: string | null;
+  hasResume: boolean;
+  hasCover: boolean;
+};
+
+export type TailorAnswerView = {
+  id: string;
+  jobPostingId: string;
+  question: string;
+  lengthLimit: number | null;
+  lengthUnit: "characters" | "words" | null;
+  answer: string;
+  warnings: string[];
+  provider: string | null;
+  model: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export function formatLocationAndWorksite(
   location: string | null,
   worksite: string | null,

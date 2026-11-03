@@ -124,9 +124,54 @@ export const levelRowIdInput = z.object({
   id: z.string().trim().min(1).max(80),
 });
 
+export const tailorTarget = z.enum(["resume", "coverLetter"]);
+
 export const tailorInput = z.object({
   jobPostingId: z.string().min(1),
+  targets: z.array(tailorTarget).min(1).optional(),
 });
+
+const lengthLimitField = z.number().int().positive().max(20_000).nullable().optional();
+const lengthUnitField = z.enum(["characters", "words"]).nullable().optional();
+
+function lengthPairOk(value: {
+  lengthLimit?: number | null;
+  lengthUnit?: "characters" | "words" | null;
+}): boolean {
+  const limitTouched = value.lengthLimit !== undefined;
+  const unitTouched = value.lengthUnit !== undefined;
+  if (!limitTouched && !unitTouched) return true;
+  if (limitTouched !== unitTouched) return false;
+  return (value.lengthLimit == null) === (value.lengthUnit == null);
+}
+
+const lengthPairMessage = "Set both a length limit and a unit, or leave both empty";
+
+export const tailorAnswerCreate = z
+  .object({
+    jobPostingId: z.string().min(1),
+    question: z.string().trim().min(1).max(4000),
+    lengthLimit: lengthLimitField,
+    lengthUnit: lengthUnitField,
+  })
+  .refine(lengthPairOk, { message: lengthPairMessage, path: ["lengthUnit"] });
+
+export const tailorAnswerPatch = z
+  .object({
+    question: z.string().trim().min(1).max(4000).optional(),
+    answer: z.string().max(100_000).optional(),
+    lengthLimit: lengthLimitField,
+    lengthUnit: lengthUnitField,
+  })
+  .refine(lengthPairOk, { message: lengthPairMessage, path: ["lengthUnit"] });
+
+export const tailorAnswerGenerate = z
+  .object({
+    question: z.string().trim().min(1).max(4000).optional(),
+    lengthLimit: lengthLimitField,
+    lengthUnit: lengthUnitField,
+  })
+  .refine(lengthPairOk, { message: lengthPairMessage, path: ["lengthUnit"] });
 
 export const jobSort = z.enum([
   "score",

@@ -18,7 +18,15 @@ import { assertUploadSize, textFromUpload } from "@/lib/files";
 import { asIso, asNumber, parseJson, parseStringArray } from "@/lib/json";
 import { loadLevelMap } from "@/lib/level-map";
 import type { factInput, factPatch, preferenceInput, questionPatch } from "@/lib/schemas";
-import { produceTailor } from "@/lib/tailor";
+import {
+  mergeTailorRecord,
+  produceAnswer,
+  produceCover,
+  produceResume,
+  tailorRecordFromStored,
+  type LengthLimit,
+  type TailorTarget,
+} from "@/lib/tailor";
 import type {
   CitedFact,
   DocumentView,
@@ -29,6 +37,8 @@ import type {
   PreferenceView,
   QuestionView,
   ScorePoint,
+  TailorAnswerView,
+  TailorOutputView,
   TrackedJobView,
   WorkMode,
 } from "@/lib/types";
@@ -950,40 +960,352 @@ export async function listPostings(): Promise<PostingView[]> {
   }));
 }
 
-export async function tailorPosting(jobPostingId: string) {
+type PostingRow = {
+  id: string;
+  title: string | null;
+  company: string | null;
+  rawText: string;
+  evaluation: { id: string } | null;
+};
+
+function jobInput(posting: { id: string; title: string | null; company: string | null; rawText: string }) {
+  return {
+    id: posting.id,
+    title: posting.title,
+    company: posting.company,
+    rawText: posting.rawText,
+  };
+}
+
+async function requirePosting(jobPostingId: string): Promise<{ user: { id: string; displayName: string }; posting: PostingRow }> {
   const user = await getLocalUser();
   const posting = await getPrisma().jobPosting.findFirst({
     where: { id: jobPostingId, userId: user.id },
     include: { evaluation: true },
   });
   if (!posting) throw new AppError("Job posting not found.", 404);
-  const facts = await listFacts();
-  const draft = await produceTailor({
-    facts: facts.map(toCited),
-    job: {
-      id: posting.id,
-      title: posting.title,
-      company: posting.company,
-      rawText: posting.rawText,
-    },
-    displayName: user.displayName,
+  return { user, posting };
+}
+
+async function citedFacts() {
+  return (await listFacts()).map(toCited);
+}
+
+function failureMessage(error: unknown): string {
+  if (error instanceof AppError) return error.message;
+  if (error instanceof Error && error.message) return error.message;
+  return "Could not generate.";
+}
+
+function lengthLimitFrom(limit: number | null, unit: string | null): LengthLimit {
+  if (limit == null || unit == null) return null;
+  if (unit !== "characters" && unit !== "words") return null;
+  if (!Number.isInteger(limit) || limit < 1) return null;
+  return { unit, max: limit };
+}
+
+const tailorWriteChain = new Map<string, Promise<unknown>>();
+
+function enqueueTailorWrite<T>(jobPostingId: string, work: () => Promise<T>): Promise<T> {
+  const previous = tailorWriteChain.get(jobPostingId) ?? Promise.resolve();
+  const next = previous.then(work, work);
+  const settled = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  tailorWriteChain.set(jobPostingId, settled);
+  return next.finally(() => {
+    if (tailorWriteChain.get(jobPostingId) === settled) tailorWriteChain.delete(jobPostingId);
   });
-  const saved = await getPrisma().tailorOutput.create({
+}
+
+function serializeTailor(row: {
+  id: string;
+  jobPostingId: string;
+  createdAt: Date | string;
+  resumeEditsJson: string;
+  coverLetter: string;
+  warningsJson: string;
+  resumeWarningsJson: string;
+  coverWarningsJson: string;
+  provider: string;
+  model: string | null;
+  resumeProvider: string | null;
+  resumeModel: string | null;
+  coverProvider: string | null;
+  coverModel: string | null;
+}): TailorOutputView {
+  const record = tailorRecordFromStored(row);
+  return {
+    id: row.id,
+    jobPostingId: row.jobPostingId,
+    createdAt: asIso(row.createdAt),
+    resumeEdits: record.resumeEdits,
+    coverLetter: record.coverLetter,
+    warnings: record.warnings,
+    resumeWarnings: record.resumeWarnings,
+    coverWarnings: record.coverWarnings,
+    provider: record.provider,
+    model: record.model,
+    resumeProvider: record.resumeProvider,
+    coverProvider: record.coverProvider,
+    hasResume: record.hasResume,
+    hasCover: record.hasCover,
+  };
+}
+
+async function persistTailor(
+  userId: string,
+  posting: PostingRow,
+  patch: Parameters<typeof mergeTailorRecord>[1],
+): Promise<TailorOutputView> {
+  return enqueueTailorWrite(posting.id, async () => {
+    const prisma = getPrisma();
+    const existing = await prisma.tailorOutput.findFirst({
+      where: { userId, jobPostingId: posting.id },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    });
+    const merged = mergeTailorRecord(existing ? tailorRecordFromStored(existing) : null, patch);
+    const data = {
+      resumeEditsJson: JSON.stringify(merged.resumeEdits),
+      coverLetter: merged.coverLetter,
+      warningsJson: JSON.stringify(merged.warnings),
+      resumeWarningsJson: JSON.stringify(merged.resumeWarnings),
+      coverWarningsJson: JSON.stringify(merged.coverWarnings),
+      provider: merged.provider,
+      model: merged.model,
+      resumeProvider: merged.resumeProvider,
+      resumeModel: merged.resumeModel,
+      coverProvider: merged.coverProvider,
+      coverModel: merged.coverModel,
+    };
+    const saved = existing
+      ? await prisma.tailorOutput.update({ where: { id: existing.id }, data })
+      : await prisma.tailorOutput.create({
+          data: {
+            id: crypto.randomUUID(),
+            userId,
+            jobPostingId: posting.id,
+            evaluationId: posting.evaluation?.id ?? null,
+            ...data,
+          },
+        });
+    return serializeTailor(saved);
+  });
+}
+
+export async function getTailorDraft(jobPostingId: string) {
+  const { user, posting } = await requirePosting(jobPostingId);
+  const row = await getPrisma().tailorOutput.findFirst({
+    where: { userId: user.id, jobPostingId: posting.id },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+  });
+  return { output: row ? serializeTailor(row) : null };
+}
+
+export async function tailorPosting(jobPostingId: string, targets: TailorTarget[]) {
+  const { user, posting } = await requirePosting(jobPostingId);
+  const facts = await citedFacts();
+  const job = jobInput(posting);
+  const unique = [...new Set(targets)];
+  let resume: Awaited<ReturnType<typeof produceResume>> | null = null;
+  let cover: Awaited<ReturnType<typeof produceCover>> | null = null;
+  let resumeError: string | null = null;
+  let coverError: string | null = null;
+  let resumeStatus = 502;
+  let coverStatus = 502;
+  if (unique.includes("resume")) {
+    try {
+      resume = await produceResume({ facts, job });
+    } catch (error) {
+      resumeError = failureMessage(error);
+      resumeStatus = error instanceof AppError ? error.status : 502;
+    }
+  }
+  if (unique.includes("coverLetter")) {
+    try {
+      cover = await produceCover({ facts, job, displayName: user.displayName });
+    } catch (error) {
+      coverError = failureMessage(error);
+      coverStatus = error instanceof AppError ? error.status : 502;
+    }
+  }
+  if (!resume && !cover) {
+    const parts = [
+      resumeError ? `Resume: ${resumeError}` : "",
+      coverError ? `Cover letter: ${coverError}` : "",
+    ].filter(Boolean);
+    const statuses = [resumeError ? resumeStatus : null, coverError ? coverStatus : null].filter(
+      (item): item is number => item != null,
+    );
+    const status = statuses.length > 0 && statuses.every((item) => item === statuses[0]) ? statuses[0]! : 502;
+    throw new AppError(parts.join(" ") || "Could not tailor.", status);
+  }
+  const output = await persistTailor(user.id, posting, {
+    resume: resume
+      ? {
+          resumeEdits: resume.resumeEdits,
+          warnings: resume.warnings,
+          provider: resume.provider,
+          model: resume.model,
+        }
+      : undefined,
+    cover: cover
+      ? {
+          coverLetter: cover.coverLetter,
+          warnings: cover.warnings,
+          provider: cover.provider,
+          model: cover.model,
+        }
+      : undefined,
+  });
+  return { output, errors: { resume: resumeError, coverLetter: coverError } };
+}
+
+function serializeAnswer(row: {
+  id: string;
+  jobPostingId: string;
+  question: string;
+  lengthLimit: number | null;
+  lengthUnit: string | null;
+  answer: string;
+  warningsJson: string;
+  provider: string | null;
+  model: string | null;
+  createdAt: Date | string;
+  updatedAt: Date | string;
+}): TailorAnswerView {
+  const unit = row.lengthUnit === "characters" || row.lengthUnit === "words" ? row.lengthUnit : null;
+  return {
+    id: row.id,
+    jobPostingId: row.jobPostingId,
+    question: row.question,
+    lengthLimit: row.lengthLimit,
+    lengthUnit: row.lengthLimit != null ? unit : null,
+    answer: row.answer,
+    warnings: parseStringArray(row.warningsJson),
+    provider: row.provider,
+    model: row.model,
+    createdAt: asIso(row.createdAt),
+    updatedAt: asIso(row.updatedAt),
+  };
+}
+
+export async function listTailorAnswers(jobPostingId: string) {
+  const { user, posting } = await requirePosting(jobPostingId);
+  const rows = await getPrisma().tailorAnswer.findMany({
+    where: { userId: user.id, jobPostingId: posting.id },
+    orderBy: { createdAt: "asc" },
+  });
+  return { answers: rows.map(serializeAnswer) };
+}
+
+export async function createTailorAnswer(input: {
+  jobPostingId: string;
+  question: string;
+  lengthLimit?: number | null;
+  lengthUnit?: "characters" | "words" | null;
+}) {
+  const { user, posting } = await requirePosting(input.jobPostingId);
+  const length = lengthLimitFrom(input.lengthLimit ?? null, input.lengthUnit ?? null);
+  const generated = await produceAnswer({
+    facts: await citedFacts(),
+    job: jobInput(posting),
+    question: input.question,
+    length,
+  });
+  const saved = await getPrisma().tailorAnswer.create({
     data: {
       id: crypto.randomUUID(),
       userId: user.id,
       jobPostingId: posting.id,
-      evaluationId: posting.evaluation?.id ?? null,
-      resumeEditsJson: JSON.stringify(draft.resumeEdits),
-      coverLetter: draft.coverLetter,
-      provider: draft.provider,
-      model: draft.model,
-      warningsJson: JSON.stringify(draft.warnings),
+      question: input.question.trim(),
+      lengthLimit: length?.max ?? null,
+      lengthUnit: length?.unit ?? null,
+      answer: generated.answer,
+      provider: generated.provider,
+      model: generated.model,
+      warningsJson: JSON.stringify(generated.warnings),
     },
   });
-  return {
-    ...draft,
-    id: saved.id,
-    createdAt: asIso(saved.createdAt),
-  };
+  return serializeAnswer(saved);
+}
+
+async function requireAnswer(id: string) {
+  const user = await getLocalUser();
+  const row = await getPrisma().tailorAnswer.findFirst({ where: { id, userId: user.id } });
+  if (!row) throw new AppError("Answer not found.", 404);
+  return { user, row };
+}
+
+export async function updateTailorAnswer(
+  id: string,
+  input: {
+    question?: string;
+    answer?: string;
+    lengthLimit?: number | null;
+    lengthUnit?: "characters" | "words" | null;
+  },
+) {
+  const { row } = await requireAnswer(id);
+  const lengthLimit = input.lengthLimit === undefined ? row.lengthLimit : input.lengthLimit;
+  const lengthUnit = input.lengthUnit === undefined ? row.lengthUnit : input.lengthUnit;
+  if ((lengthLimit == null) !== (lengthUnit == null)) {
+    throw new AppError("Set both a length limit and a unit, or leave both empty.", 400);
+  }
+  const saved = await getPrisma().tailorAnswer.update({
+    where: { id: row.id },
+    data: {
+      question: input.question?.trim() ?? row.question,
+      answer: input.answer ?? row.answer,
+      lengthLimit,
+      lengthUnit,
+    },
+  });
+  return serializeAnswer(saved);
+}
+
+export async function deleteTailorAnswer(id: string) {
+  const { row } = await requireAnswer(id);
+  await getPrisma().tailorAnswer.delete({ where: { id: row.id } });
+}
+
+export async function regenerateTailorAnswer(
+  id: string,
+  input: {
+    question?: string;
+    lengthLimit?: number | null;
+    lengthUnit?: "characters" | "words" | null;
+  },
+) {
+  const { user, row } = await requireAnswer(id);
+  const posting = await getPrisma().jobPosting.findFirst({
+    where: { id: row.jobPostingId, userId: user.id },
+  });
+  if (!posting) throw new AppError("Job posting not found.", 404);
+  const question = input.question?.trim() || row.question;
+  const lengthLimit = input.lengthLimit === undefined ? row.lengthLimit : input.lengthLimit;
+  const lengthUnit = input.lengthUnit === undefined ? row.lengthUnit : input.lengthUnit;
+  if ((lengthLimit == null) !== (lengthUnit == null)) {
+    throw new AppError("Set both a length limit and a unit, or leave both empty.", 400);
+  }
+  const generated = await produceAnswer({
+    facts: await citedFacts(),
+    job: jobInput(posting),
+    question,
+    length: lengthLimitFrom(lengthLimit, lengthUnit),
+  });
+  const saved = await getPrisma().tailorAnswer.update({
+    where: { id: row.id },
+    data: {
+      question,
+      lengthLimit,
+      lengthUnit,
+      answer: generated.answer,
+      provider: generated.provider,
+      model: generated.model,
+      warningsJson: JSON.stringify(generated.warnings),
+    },
+  });
+  return serializeAnswer(saved);
 }

@@ -25,6 +25,7 @@ model User {
   evaluations   Evaluation[]
   trackedJobs   TrackedJob[]
   tailorOutputs TailorOutput[]
+  tailorAnswers TailorAnswer[]
 }
 
 model Document {
@@ -145,6 +146,7 @@ model JobPosting {
   evaluation    Evaluation?
   trackedJob    TrackedJob?
   tailorOutputs TailorOutput[]
+  tailorAnswers TailorAnswer[]
 
   @@index([userId])
   @@index([status])
@@ -204,7 +206,40 @@ model TailorOutput {
   provider        String
   model           String?
   warningsJson    String      @default("[]")
+  /// Warnings for resume edits only. Empty on rows written before the split.
+  resumeWarningsJson String   @default("[]")
+  /// Warnings for the cover letter only. Empty on rows written before the split.
+  coverWarningsJson  String   @default("[]")
+  /// Set once resume edits have been generated on their own. Null on older combined rows.
+  resumeProvider     String?
+  resumeModel        String?
+  /// Set once a cover letter has been generated on its own. Null on older combined rows.
+  coverProvider      String?
+  coverModel         String?
   createdAt       DateTime    @default(now())
+
+  @@index([userId])
+  @@index([jobPostingId])
+}
+
+/// One pasted application question and its answer, for a single posting.
+model TailorAnswer {
+  id           String     @id
+  userId       String
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobPostingId String
+  jobPosting   JobPosting @relation(fields: [jobPostingId], references: [id], onDelete: Cascade)
+  question     String
+  /// Positive cap. Null when the user did not set one.
+  lengthLimit  Int?
+  /// "characters" or "words" when lengthLimit is set.
+  lengthUnit   String?
+  answer       String     @default("")
+  provider     String?
+  model        String?
+  warningsJson String     @default("[]")
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
 
   @@index([userId])
   @@index([jobPostingId])

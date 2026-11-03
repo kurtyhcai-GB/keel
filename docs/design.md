@@ -74,9 +74,13 @@ The location column is `location / worksite`, for example `Redmond, WA / Hybrid:
 
 ### 6. Tailoring
 
-`POST /api/tailor` with `{ "jobPostingId" }` works for a pending or tracked posting. The local draft only restates baseline facts, names the posting's own title and company, and adds edits that say "do not add it" for requirement lines the baseline does not record.
+`POST /api/tailor` with `{ "jobPostingId", "targets" }` works for a pending or tracked posting. `targets` is `resume`, `coverLetter`, or both. Omitting it still generates both, which is what older clients did. Each target is its own model call, and the prompt for that call only includes the baseline facts and the posting fields that document needs. The cover letter also gets the sign-off name. Regenerating one target updates that side of the latest `TailorOutput` and leaves the other document as it was.
 
-A model draft is filtered: unknown fact ids are dropped, and a `sourceExcerpt` must appear in the cited fact. The response still carries a warning to read the letter before sending it. The model can phrase a sentence the filter does not catch. That is why the warning stays.
+The local draft only restates baseline facts, names the posting's own title and company, and adds edits that say "do not add it" for requirement lines the baseline does not record.
+
+A model draft is filtered: unknown fact ids are dropped, and a `sourceExcerpt` must appear in the cited fact. Required JSON fields are checked with the same lenient style as evaluation: bad resume-edit entries are dropped, and a missing required field fails with the field name in the error. The response still carries a warning to read the draft before you send it. The model can phrase a sentence the filter does not catch. That is why the warning stays.
+
+`TailorAnswer` stores free-form application questions for the same posting. `POST /api/tailor/answers` generates one answer from the baseline and the posting (including the company named there) and saves it. A length limit, in characters or words, is optional and is applied after the model returns. Answers can be edited, copied, deleted, or regenerated one at a time. `GET /api/tailor` and `GET /api/tailor/answers` reload what was saved.
 
 ## Architecture
 
@@ -128,9 +132,10 @@ If `DATABASE_URL` already starts with `postgres`, the current SQLite build throw
 | `JobPosting` | Raw text plus the columns the tracker needs. `pending`, `awaiting_preference`, `tracked`, or `ruled_out`. |
 | `Evaluation` | Scores, cited strengths, gaps, deal-breakers, acknowledged mismatches, provider, warnings. |
 | `TrackedJob` | The decision to keep a posting. |
-| `TailorOutput` | A stored letter and the resume edits that produced it. |
+| `TailorOutput` | Resume edits and a cover letter for one posting. Regenerating one does not replace the other. |
+| `TailorAnswer` | One application question, optional length limit, and answer for a posting. |
 
-Skipping a job deletes the `JobPosting`. Evaluations, tailor output, and the tracked row cascade with it.
+Skipping a job deletes the `JobPosting`. Evaluations, tailor output, application answers, and the tracked row cascade with it.
 
 ## API
 
@@ -152,7 +157,11 @@ Skipping a job deletes the `JobPosting`. Evaluations, tailor output, and the tra
 | GET | `/api/jobs` | Tracked jobs, sorted. |
 | DELETE | `/api/jobs/:id` | Remove a tracked job and its posting. |
 | GET | `/api/postings` | Recent pending and tracked postings, for Tailor. |
-| POST | `/api/tailor` | `{ "jobPostingId" }`. |
+| GET | `/api/tailor` | Latest resume edits and cover letter for `jobPostingId`. |
+| POST | `/api/tailor` | `{ "jobPostingId", "targets"? }`. `targets` is `resume`, `coverLetter`, or both. Omitted means both. |
+| GET, POST | `/api/tailor/answers` | List or generate an application answer for `jobPostingId`. |
+| PATCH, DELETE | `/api/tailor/answers/:id` | Edit or delete one saved answer. |
+| POST | `/api/tailor/answers/:id/generate` | Regenerate one saved answer. |
 
 ## What is still a stub
 
