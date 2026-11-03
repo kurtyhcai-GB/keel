@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { deleteJobPostingForUser } from "@/lib/delete-job";
 import { getPrisma } from "@/lib/db";
 import { AppError } from "@/lib/errors";
 import { findPreferencePauses, parsePosting, produceEvaluation, ruledOutReason, scoreLocally } from "@/lib/evaluate";
@@ -932,11 +933,9 @@ export async function listTrackedJobs(sort: SortKey = "score", direction: "asc" 
   return views;
 }
 
-export async function deleteTrackedJob(id: string) {
+export async function deleteTrackedJob(jobPostingId: string) {
   const user = await getLocalUser();
-  const tracked = await getPrisma().trackedJob.findFirst({ where: { id, userId: user.id } });
-  if (!tracked) throw new AppError("Tracked job not found.", 404);
-  await getPrisma().jobPosting.delete({ where: { id: tracked.jobPostingId } });
+  await deleteJobPostingForUser(getPrisma(), user.id, jobPostingId);
 }
 
 export async function listPostings(): Promise<PostingView[]> {
